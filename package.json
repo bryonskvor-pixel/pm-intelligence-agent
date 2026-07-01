@@ -1,0 +1,16 @@
+{
+  "name": "pm-intelligence-agent",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "test:modernfold": "node src/specialists/test-modernfold.js",
+    "test:skyfold": "node src/specialists/test-skyfold.js",
+    "test:smoke-guard": "node src/specialists/test-smoke-guard.js",
+    "test:airolite": "node src/specialists/test-airolite.js",
+    "test:euro-wall": "node src/specialists/test-euro-wall.js"
+  },
+  "dependencies": {
+    "@anthropic-ai/sdk": "^0.32.1"
+  }
+}
