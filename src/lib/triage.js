@@ -1,4 +1,5 @@
 import Anthropic from '@anthropic-ai/sdk';
+import { callAndParseJson } from './callAndParseJson.js';
 
 // Condensed, triage-specific relevance guidance per brand — deliberately NOT the full specialist
 // system prompts (those carry exact tolerance/formula detail meant for diagnostic reasoning over
@@ -28,38 +29,14 @@ Also transcribe "orderedSheetNumbers": the complete list of every sheet number i
 Output a single JSON object with one key per brand name above, each mapping to { "candidateSheetNumbers": [string], "reasoning": string }, plus a top-level "unclassifiedSheetNumbers" array for sheets with no plausible connection to any of the 5 brands, plus the top-level "orderedSheetNumbers" array described above.
 Respond with ONLY the JSON object, no prose, no markdown code fences.`;
 
-async function callAndParse(anthropic, userContent, retryReminder) {
-  const message = await anthropic.messages.create({
-    model: 'claude-sonnet-4-5-20250929',
-    max_tokens: 4096,
-    system: SYSTEM_PROMPT,
-    messages: [{ role: 'user', content: retryReminder ? `${userContent}\n\n${retryReminder}` : userContent }],
-  });
-  const textBlock = message.content.find((b) => b.type === 'text');
-  const cleaned = textBlock.text.trim().replace(/^```(?:json)?\n?/, '').replace(/\n?```$/, '');
-  try {
-    // Normalized to the same shape as extraction.js's usage summary, so callers can sum usage
-    // across pipeline stages without special-casing each stage's raw API response shape.
-    const usage = {
-      callCount: 1,
-      inputTokens: message.usage.input_tokens || 0,
-      outputTokens: message.usage.output_tokens || 0,
-      cacheCreationInputTokens: message.usage.cache_creation_input_tokens || 0,
-      cacheReadInputTokens: message.usage.cache_read_input_tokens || 0,
-    };
-    return { result: JSON.parse(cleaned), usage };
-  } catch (err) {
-    if (retryReminder) {
-      console.error('RAW MODEL OUTPUT (after retry):\n', cleaned);
-      throw err;
-    }
-    return callAndParse(anthropic, userContent, 'Your previous response was invalid JSON. Re-emit it as strictly valid JSON.');
-  }
-}
-
 // indexText: raw text of a project's sheet index/cover page (e.g. extracted sheet 0's rawText) —
 // the free-form listing of sheet numbers + titles most sets already have on their cover sheet.
 export async function triageFromIndexText(indexText) {
   const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
-  return callAndParse(anthropic, `SHEET INDEX:\n${indexText}`);
+  return callAndParseJson(anthropic, {
+    model: 'claude-sonnet-4-5-20250929',
+    maxTokens: 4096,
+    system: SYSTEM_PROMPT,
+    userContent: `SHEET INDEX:\n${indexText}`,
+  });
 }

@@ -2,8 +2,21 @@
 // This is what lets a structural or electrical sheet that never names a brand still get pulled
 // into that brand's specialist context, because it shares a tag or gridline with a sheet that does.
 
+import { normalizeSheetNumber } from './sheetNumber.js';
+
+// Loose normalization for tags/gridlines — deliberately preserves internal whitespace, since
+// these can be multi-word ("NURSING LAB 155"), unlike sheet numbers.
 function normalizeKey(s) {
   return String(s).trim().toUpperCase();
+}
+
+// SHEET:<number> composite keys specifically need the stricter sheet-number normalizer (strips
+// all whitespace), not the loose tag normalizer above. The sheet-number portion of this key can
+// come from crossReferences.targetSheet — freeform LLM transcription of "SEE X-XXX" notation,
+// which can plausibly have irregular spacing ("S- 501") that the loose normalizer would leave
+// intact, silently failing to match the clean "S-501" key built from a sheet's own sheetNumber.
+function buildSheetKey(sheetNumber) {
+  return `SHEET:${normalizeSheetNumber(sheetNumber)}`;
 }
 
 // extractedSheets: output of extractSheetsFromPdf — one object per sheet with tags/gridlines/crossReferences.
@@ -30,9 +43,12 @@ export function buildTagIndex(extractedSheets, { maxShareRatio = 0.15, minShareF
     if (!sheet.sheetNumber) continue;
     for (const tag of sheet.tags || []) addRef(tag, sheet.sheetNumber);
     for (const gridline of sheet.gridlines || []) addRef(gridline, sheet.sheetNumber);
+    // Register every sheet's own SHEET: key unconditionally — this was previously nested inside
+    // the crossReferences loop, so a sheet with zero outgoing references (e.g. a purely-referenced
+    // structural sheet) never got its own key registered and could never be a correlation target.
+    addRef(buildSheetKey(sheet.sheetNumber), sheet.sheetNumber);
     for (const ref of sheet.crossReferences || []) {
-      if (ref.targetSheet) addRef(`SHEET:${ref.targetSheet}`, sheet.sheetNumber);
-      addRef(`SHEET:${sheet.sheetNumber}`, sheet.sheetNumber);
+      if (ref.targetSheet) addRef(buildSheetKey(ref.targetSheet), sheet.sheetNumber);
     }
   }
 
@@ -61,8 +77,8 @@ export function correlateOneHop(directSheetNumbers, tagIndex, allSheetsByNumber)
     const keys = [
       ...(sheet.tags || []),
       ...(sheet.gridlines || []),
-      `SHEET:${sheetNumber}`,
-      ...(sheet.crossReferences || []).map((r) => r.targetSheet && `SHEET:${r.targetSheet}`).filter(Boolean),
+      buildSheetKey(sheetNumber),
+      ...(sheet.crossReferences || []).map((r) => r.targetSheet && buildSheetKey(r.targetSheet)).filter(Boolean),
     ];
     for (const key of keys) {
       const k = normalizeKey(key);

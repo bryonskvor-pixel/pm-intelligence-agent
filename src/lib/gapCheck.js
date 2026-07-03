@@ -11,14 +11,26 @@ import { normalizeSheetNumber } from './sheetNumber.js';
 // citations ("404.2.3.3"), table/figure references ("Table 703.2.4", "FIG. 610.2"), and generic
 // terms ("RCP", "schedule") don't match that shape. The extraction agent's crossReferences field
 // captures both kinds indiscriminately (it's transcribing "see X" language faithfully, which is
-// correct), so this filter is what keeps the gap check's signal from being drowned by citation noise.
-function looksLikeSheetNumber(target) {
-  return /^[A-Z]{1,4}-?\d/i.test(String(target).trim());
+// correct), so this is what keeps the gap check's signal from being drowned by citation noise.
+//
+// Deliberately unanchored (searches anywhere in the string, not just the start): compound
+// reference notation like "SIM 3/A-601" — the exact example extraction.js's own system prompt
+// documents as valid crossReferences input — has the real sheet number embedded mid-string, not
+// at position 0. An anchored match would silently reject this and every reference like it.
+// Accepted tradeoff: this can also match a short standards citation shaped like a sheet number
+// (e.g. "ASTM E90"). That's a low-cost false positive — a human glancing at the gap list
+// recognizes it immediately — versus the higher-cost alternative of a false negative silently
+// dropping a real, referenced-but-missing sheet from the check meant to catch exactly that.
+const SHEET_NUMBER_PATTERN = /[A-Z]{1,4}-?\d[\dA-Z.]*/i;
+
+function extractSheetNumberCandidate(target) {
+  const match = String(target).trim().match(SHEET_NUMBER_PATTERN);
+  return match ? match[0] : null;
 }
 
 // fedSheets: the subset of extracted sheet objects actually being used for a run (could be all
-// of them, or a curated/triaged subset). Returns every crossReference whose targetSheet looks
-// like a real sheet number and isn't present in that same fed set, grouped by the missing target.
+// of them, or a curated/triaged subset). Returns every crossReference whose targetSheet contains
+// a real-sheet-number-shaped substring not present in that same fed set, grouped by the missing target.
 export function findMissingCrossReferences(fedSheets) {
   const fedNumbers = new Set(fedSheets.map((s) => normalizeSheetNumber(s.sheetNumber)).filter(Boolean));
   const gapsByTarget = new Map();
@@ -27,11 +39,12 @@ export function findMissingCrossReferences(fedSheets) {
   for (const sheet of fedSheets) {
     for (const ref of sheet.crossReferences || []) {
       if (!ref.targetSheet) continue;
-      if (!looksLikeSheetNumber(ref.targetSheet)) {
+      const candidate = extractSheetNumberCandidate(ref.targetSheet);
+      if (!candidate) {
         excludedCount++;
         continue;
       }
-      const targetKey = normalizeSheetNumber(ref.targetSheet);
+      const targetKey = normalizeSheetNumber(candidate);
       if (fedNumbers.has(targetKey)) continue;
 
       if (!gapsByTarget.has(targetKey)) gapsByTarget.set(targetKey, { targetSheet: ref.targetSheet, referencedBy: [] });

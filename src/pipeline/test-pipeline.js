@@ -2,22 +2,12 @@ import fs from 'fs';
 import path from 'path';
 import { runPipelineFromPdf } from './runFromPdf.js';
 import { renderReportMarkdown } from '../render/renderMarkdown.js';
+import { sumUsageStages, estimateCostUSD } from '../lib/extraction.js';
 
 const PDF_PATH = process.argv[2];
 if (!PDF_PATH) {
   console.error('Usage: node src/pipeline/test-pipeline.js <path-to-pdf>');
   process.exit(1);
-}
-
-function sumUsage(usageStages) {
-  return Object.values(usageStages).reduce(
-    (acc, u) => ({
-      inputTokens: acc.inputTokens + u.inputTokens,
-      outputTokens: acc.outputTokens + u.outputTokens,
-      callCount: acc.callCount + u.callCount,
-    }),
-    { inputTokens: 0, outputTokens: 0, callCount: 0 }
-  );
 }
 
 async function main() {
@@ -55,12 +45,16 @@ async function main() {
   console.log('Cross-brand watch:', result.report.crossBrandWatch.length, 'sheet(s)');
   console.log('Brand appendix:', result.report.brandAppendix.map((b) => b.brand).join(', ') || '(none — no brand matched any extracted sheet)');
   console.log('Unclassified sheets:', result.report.unclassifiedSheets.length);
+  if (result.report.duplicateSheetNumbers?.length) {
+    console.log('DUPLICATE SHEET NUMBERS (extraction defect, not routing noise):', result.report.duplicateSheetNumbers.join(', '));
+  }
 
-  const totals = sumUsage(result.usage);
+  const totals = sumUsageStages(result.usage);
+  const usageTotals = { ...totals, estimatedCostUSD: estimateCostUSD(totals) };
   console.log(`\n--- TOTAL USAGE (${totals.callCount} API calls across index+triage+extraction) ---`);
   console.log(`Input tokens: ${totals.inputTokens.toLocaleString()}, Output tokens: ${totals.outputTokens.toLocaleString()}`);
-  const estCost = (totals.inputTokens / 1e6) * 3 + (totals.outputTokens / 1e6) * 15;
-  console.log(`Estimated cost: $${estCost.toFixed(3)} (rough, verify current pricing) for ${result.pagesExtracted.length} extracted pages`);
+  console.log(`Cache write: ${totals.cacheCreationInputTokens.toLocaleString()}, Cache read: ${totals.cacheReadInputTokens.toLocaleString()}`);
+  console.log(`Estimated cost: $${usageTotals.estimatedCostUSD.toFixed(3)} (rough, verify current pricing) for ${result.pagesExtracted.length} extracted pages`);
 
   const md = renderReportMarkdown(result.report, {
     projectName: path.basename(PDF_PATH, path.extname(PDF_PATH)),
@@ -70,7 +64,7 @@ async function main() {
       triage: result.triage,
       orderingMismatches: result.orderingMismatches,
       gapCheck: result.gapCheck,
-      usage: result.usage,
+      usageTotals,
     },
   });
   fs.writeFileSync('pipeline_report.md', md);

@@ -20,7 +20,7 @@ For each page, extract:
 - "keynotes": an array of every keynote/callout, each as { "marker": string, "text": string }.
 - "tags": an array of every unique equipment/wall/door/opening tag visible on the sheet (e.g. "OW-1", "SC-1", "L-3", room numbers). Include tags shown in schedules and tags shown directly on the plan/elevation graphics.
 - "gridlines": an array of every gridline reference visible on the sheet (e.g. "D-4", "D-9", "B-7").
-- "crossReferences": an array of every explicit reference to another sheet (e.g. "SEE S-501 FOR STEEL", "SIM 3/A-601"), each as { "targetSheet": string, "context": string }.
+- "crossReferences": an array of every explicit reference to another sheet. "targetSheet" must be ONLY the clean sheet number being referenced (e.g. "S-501", "A-601") — never the surrounding phrase or a local detail/section number. Put the full original phrase in "context" instead. For "SEE S-501 FOR STEEL": targetSheet "S-501", context "SEE S-501 FOR STEEL". For "SIM 3/A-601": targetSheet "A-601", context "SIM 3/A-601". Each entry is { "targetSheet": string, "context": string }.
 - "rawText": a complete, faithful transcription of all readable text on the sheet — general notes, legends, everything not already captured structurally above. This is the ground-truth record other agents will cite from, so completeness matters more than brevity.
 
 If a page is unreadable, blank, or not a drawing sheet (e.g. a divider page), still return an object for it with sheetNumber null and a "notes" field explaining why.
@@ -49,6 +49,35 @@ export function createUsageTracker() {
       return { callCount: calls.length, calls, ...totals };
     },
   };
+}
+
+// Sums usage objects already in createUsageTracker().summary()'s normalized shape (this file's
+// own extraction usage, and triage.js's, which was deliberately normalized to match) across
+// pipeline stages. Shared so every caller totals the same 5 fields — a hand-rolled sum is how
+// cache token counts silently went missing from a cost estimate once already.
+export function sumUsageStages(usageStages) {
+  return Object.values(usageStages).reduce(
+    (acc, u) => ({
+      callCount: acc.callCount + (u.callCount || 0),
+      inputTokens: acc.inputTokens + (u.inputTokens || 0),
+      outputTokens: acc.outputTokens + (u.outputTokens || 0),
+      cacheCreationInputTokens: acc.cacheCreationInputTokens + (u.cacheCreationInputTokens || 0),
+      cacheReadInputTokens: acc.cacheReadInputTokens + (u.cacheReadInputTokens || 0),
+    }),
+    { callCount: 0, inputTokens: 0, outputTokens: 0, cacheCreationInputTokens: 0, cacheReadInputTokens: 0 }
+  );
+}
+
+// Rough estimate only, at Claude Sonnet's published per-MTok rates as of this writing
+// ($3 input / $15 output / $3.75 cache write / $0.30 cache read) — verify current pricing
+// before treating this as a real budget number; the token counts feeding it are exact, this isn't.
+export function estimateCostUSD(usage) {
+  return (
+    (usage.inputTokens / 1e6) * 3 +
+    (usage.outputTokens / 1e6) * 15 +
+    (usage.cacheCreationInputTokens / 1e6) * 3.75 +
+    (usage.cacheReadInputTokens / 1e6) * 0.3
+  );
 }
 
 // pageBatch: [{ index, bytes }] — index is the page's real position in the original document,
@@ -81,12 +110,23 @@ async function callOnce(anthropic, content, maxTokens, retryReminder, usageTrack
     messages: [{ role: 'user', content: retryReminder ? [...content, { type: 'text', text: retryReminder }] : content }],
   });
   usageTracker.record(message.usage, meta);
-  const textBlock = message.content.find((b) => b.type === 'text');
-  const cleaned = textBlock.text.trim().replace(/^```(?:json)?\n?/, '').replace(/\n?```$/, '');
 
+  // Check truncation before ever touching message.content — a truncated response is exactly the
+  // case most likely to also lack a complete/any text block, and this check needs nothing from it.
   if (message.stop_reason === 'max_tokens') {
     throw new TruncatedBatchError(`Response truncated at max_tokens=${maxTokens} before completing valid JSON.`);
   }
+
+  const textBlock = message.content.find((b) => b.type === 'text');
+  if (!textBlock) {
+    // Not a network/API error — the call succeeded, but the response had no text content to
+    // parse. Setting rawOutput routes this into the "re-emit as valid JSON" retry path, which is
+    // the right response here (unlike a genuine network error, which shouldn't get that retry).
+    const err = new Error('Response contained no text content block.');
+    err.rawOutput = '';
+    throw err;
+  }
+  const cleaned = textBlock.text.trim().replace(/^```(?:json)?\n?/, '').replace(/\n?```$/, '');
 
   try {
     return JSON.parse(cleaned);

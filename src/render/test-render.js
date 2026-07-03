@@ -1,5 +1,6 @@
 import fs from 'fs';
 import { renderReportMarkdown } from './renderMarkdown.js';
+import { sumUsageStages, estimateCostUSD } from '../lib/extraction.js';
 
 // Hand-built mock matching the real runProjectSynthesis()/runPipelineFromPdf() schema — this is
 // a pure formatting test, no LLM call needed, so a mock exercising every code path (multiple
@@ -53,7 +54,16 @@ const mockReport = {
     { brand: 'Airolite', sheetsUsed: ['A-406'], modelIdsDetected: ['T6636', 'AIROLITE-GENERAL'], findings: [{}] },
   ],
   unclassifiedSheets: ['G-001'],
+  // Exercises the duplicate-sheet-number warning path (a real defect found this session).
+  duplicateSheetNumbers: ['A-102'],
 };
+
+const usageStages = {
+  index: { callCount: 1, inputTokens: 4200, outputTokens: 1800, cacheCreationInputTokens: 0, cacheReadInputTokens: 0 },
+  triage: { callCount: 1, inputTokens: 3899, outputTokens: 1133, cacheCreationInputTokens: 0, cacheReadInputTokens: 0 },
+  extraction: { callCount: 4, inputTokens: 18000, outputTokens: 14000, cacheCreationInputTokens: 900, cacheReadInputTokens: 0 },
+};
+const usageTotals = { ...sumUsageStages(usageStages), estimatedCostUSD: estimateCostUSD(sumUsageStages(usageStages)) };
 
 const mockDiagnostics = {
   pagesExtracted: [0, 4, 17, 18],
@@ -66,11 +76,7 @@ const mockDiagnostics = {
   },
   orderingMismatches: [],
   gapCheck: { gaps: [], excludedNonSheetReferences: 3 },
-  usage: {
-    index: { inputTokens: 4200, outputTokens: 1800 },
-    triage: { inputTokens: 3899, outputTokens: 1133 },
-    extraction: { inputTokens: 18000, outputTokens: 14000 },
-  },
+  usageTotals,
 };
 
 const md = renderReportMarkdown(mockReport, {

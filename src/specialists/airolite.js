@@ -1,6 +1,7 @@
 import Anthropic from '@anthropic-ai/sdk';
 import { d1Query, embedText, vectorizeQuery } from '../lib/cloudflare.js';
 import { normalizeSheets, formatSheetsBlock } from '../lib/sheets.js';
+import { callAndParseJson } from '../lib/callAndParseJson.js';
 
 const PARAMS_DB_ID = '18812c7c-0661-4e87-beaa-926b18f13a67';
 const VECTORIZE_INDEX = 'pm-intel-airolite';
@@ -87,7 +88,12 @@ export async function runAiroliteSpecialist(sheetsInput) {
     2
   )}`;
 
-  const findings = await callAndParse(anthropic, userContent);
+  const { result: findings } = await callAndParseJson(anthropic, {
+    model: 'claude-sonnet-4-5-20250929',
+    maxTokens: 4096,
+    system: SYSTEM_PROMPT,
+    userContent,
+  });
   return {
     sheetsProcessed: sheets.map((s) => s.sheetNumber),
     modelIdsDetected: modelIds,
@@ -95,24 +101,4 @@ export async function runAiroliteSpecialist(sheetsInput) {
     semanticMatches,
     findings,
   };
-}
-
-async function callAndParse(anthropic, userContent, retryReminder) {
-  const message = await anthropic.messages.create({
-    model: 'claude-sonnet-4-5-20250929',
-    max_tokens: 4096,
-    system: SYSTEM_PROMPT,
-    messages: [{ role: 'user', content: retryReminder ? `${userContent}\n\n${retryReminder}` : userContent }],
-  });
-  const textBlock = message.content.find((b) => b.type === 'text');
-  const cleaned = textBlock.text.trim().replace(/^```(?:json)?\n?/, '').replace(/\n?```$/, '');
-  try {
-    return JSON.parse(cleaned);
-  } catch (err) {
-    if (retryReminder) {
-      console.error('RAW MODEL OUTPUT (after retry):\n', cleaned);
-      throw err;
-    }
-    return callAndParse(anthropic, userContent, 'Your previous response was invalid JSON. Re-emit it as strictly valid JSON, escaping every double-quote inside string values.');
-  }
 }

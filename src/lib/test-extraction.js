@@ -1,5 +1,5 @@
 import fs from 'fs';
-import { extractSheetsFromPdf } from './extraction.js';
+import { extractSheetsFromPdf, estimateCostUSD } from './extraction.js';
 import { buildTagIndex, correlateOneHop } from './tagIndex.js';
 
 const PDF_PATH = process.argv[2];
@@ -8,18 +8,6 @@ if (!PDF_PATH) {
   process.exit(1);
 }
 const MAX_PAGES = process.argv[3] ? parseInt(process.argv[3], 10) : null;
-
-// Rough estimate only, at Claude Sonnet's published per-MTok rates as of this writing
-// ($3 input / $15 output / $3.75 cache write / $0.30 cache read) — verify current pricing
-// before treating this as a real budget number; the token counts above it are exact, this isn't.
-function estimateCostUSD(usage) {
-  return (
-    (usage.inputTokens / 1e6) * 3 +
-    (usage.outputTokens / 1e6) * 15 +
-    (usage.cacheCreationInputTokens / 1e6) * 3.75 +
-    (usage.cacheReadInputTokens / 1e6) * 0.3
-  );
-}
 
 async function main() {
   const bytes = fs.readFileSync(PDF_PATH);

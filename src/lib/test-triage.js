@@ -18,15 +18,16 @@ async function main() {
   const { result, usage } = await triageFromIndexText(indexSheet.rawText);
 
   for (const [brand, data] of Object.entries(result)) {
-    if (brand === 'unclassifiedSheetNumbers') continue;
+    if (brand === 'unclassifiedSheetNumbers' || brand === 'orderedSheetNumbers') continue;
     console.log(`${brand}: ${(data.candidateSheetNumbers || []).length} candidate sheet(s)`);
     if (data.candidateSheetNumbers?.length) console.log('  ', data.candidateSheetNumbers.join(', '));
     console.log('   reasoning:', data.reasoning);
   }
   console.log(`\nUnclassified: ${(result.unclassifiedSheetNumbers || []).length} sheet(s)`);
+  console.log(`Ordered listing length: ${(result.orderedSheetNumbers || []).length} sheet(s)`);
 
   console.log('\n--- USAGE ---');
-  console.log(`Input: ${usage.input_tokens}, Output: ${usage.output_tokens}`);
+  console.log(`Input: ${usage.inputTokens}, Output: ${usage.outputTokens}`);
 }
 
 main().catch((err) => {

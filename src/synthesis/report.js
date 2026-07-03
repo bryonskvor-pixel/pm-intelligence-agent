@@ -24,8 +24,25 @@ const REPORT_SECTIONS = [
 // sheets: [{ sheetNumber, revision, text }]
 export function routeSheets(sheets) {
   const brandSheets = new Map(BRANDS.map((b) => [b.name, []]));
-  const sheetBrands = new Map(sheets.map((s) => [s.sheetNumber, []]));
   const unclassified = [];
+
+  // Two distinct sheets sharing a sheetNumber is a real, seen-in-production extraction defect
+  // (this project has a confirmed case: two different physical pages both extracted as "A-102").
+  // Building sheetBrands from `new Map(sheets.map(...))` silently collapses duplicate keys to one
+  // shared array — both sheets' matched brands end up pushed into the same array, producing a
+  // false Cross-Brand Watch entry that implies two products interact on one sheet, when they're
+  // actually on two unrelated physical pages. Detect duplicates explicitly and surface them
+  // rather than let the bookkeeping silently conflate two different sheets' findings.
+  const sheetNumberCounts = new Map();
+  for (const sheet of sheets) {
+    sheetNumberCounts.set(sheet.sheetNumber, (sheetNumberCounts.get(sheet.sheetNumber) || 0) + 1);
+  }
+  const duplicateSheetNumbers = [...sheetNumberCounts.entries()].filter(([, count]) => count > 1).map(([num]) => num);
+
+  const sheetBrands = new Map();
+  for (const sheet of sheets) {
+    if (!sheetBrands.has(sheet.sheetNumber)) sheetBrands.set(sheet.sheetNumber, []);
+  }
 
   for (const sheet of sheets) {
     const matchedBrands = BRANDS.filter((b) => b.detect(sheet.text).length > 0);
@@ -39,11 +56,11 @@ export function routeSheets(sheets) {
     }
   }
 
-  const multiProductSheets = sheets
-    .map((s) => ({ sheetNumber: s.sheetNumber, brands: sheetBrands.get(s.sheetNumber) }))
+  const multiProductSheets = [...new Set(sheets.map((s) => s.sheetNumber))]
+    .map((sheetNumber) => ({ sheetNumber, brands: [...new Set(sheetBrands.get(sheetNumber))] }))
     .filter((s) => s.brands.length > 1);
 
-  return { brandSheets, unclassified, multiProductSheets };
+  return { brandSheets, unclassified, multiProductSheets, duplicateSheetNumbers };
 }
 
 function dedupeFindings(findings) {
@@ -58,7 +75,7 @@ function dedupeFindings(findings) {
 
 // projectSheets: [{ sheetNumber, revision, text }]
 export async function runProjectSynthesis(projectSheets) {
-  const { brandSheets, unclassified, multiProductSheets } = routeSheets(projectSheets);
+  const { brandSheets, unclassified, multiProductSheets, duplicateSheetNumbers } = routeSheets(projectSheets);
 
   const relevantBrands = BRANDS.filter((b) => brandSheets.get(b.name).length > 0);
   const specialistResults = await Promise.all(
@@ -98,5 +115,9 @@ export async function runProjectSynthesis(projectSheets) {
     crossBrandWatch,
     brandAppendix,
     unclassifiedSheets: unclassified,
+    // Sheet numbers that appeared on 2+ distinct input sheets — a real extraction defect, not
+    // routing noise. Findings/Cross-Brand Watch entries under these sheet numbers may conflate
+    // two unrelated physical pages; surfaced explicitly rather than silently merged.
+    duplicateSheetNumbers,
   };
 }

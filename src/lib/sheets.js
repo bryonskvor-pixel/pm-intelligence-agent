@@ -9,6 +9,9 @@ export function normalizeSheets(input) {
 
 export function formatSheetsBlock(sheets) {
   return sheets
-    .map((s) => `--- SHEET ${s.sheetNumber}${s.revision ? ` rev ${s.revision}` : ''} ---\n${s.text}`)
+    // s.revision ? ... would treat a legitimate Revision 0 (a real, initial/unrevised sheet — the
+    // extraction schema explicitly allows revision as a number) as if no revision were present at
+    // all, since 0 is falsy in JS. Explicit null/undefined check instead.
+    .map((s) => `--- SHEET ${s.sheetNumber}${s.revision != null ? ` rev ${s.revision}` : ''} ---\n${s.text}`)
     .join('\n\n');
 }

@@ -16,12 +16,17 @@ function renderFinding(f) {
 
 // report: the object returned by runProjectSynthesis() (or runPipelineFromPdf().report).
 // opts.projectName / opts.generatedAt: optional header metadata.
-// opts.diagnostics: optional — pass a pipeline result's { triage, orderingMismatches, gapCheck,
-// pagesExtracted, usage } to append an internal QA appendix, kept clearly separate from the
-// PM-facing findings above it (not part of the deliverable itself, just how it was produced).
+// opts.diagnostics: optional — pass { triage, orderingMismatches, gapCheck, pagesExtracted,
+// usageTotals } to append an internal QA appendix, kept clearly separate from the PM-facing
+// findings above it. usageTotals must already be a computed summary (sumUsageStages(...) plus
+// estimatedCostUSD: estimateCostUSD(...)) — this module displays a number, it never derives one.
 export function renderReportMarkdown(report, { projectName, generatedAt, diagnostics } = {}) {
   let md = `# ${projectName || 'Project'} — PM Intelligence Report\n\n`;
   if (generatedAt) md += `_Generated ${generatedAt}_\n\n`;
+
+  if (report.duplicateSheetNumbers?.length) {
+    md += `> **⚠ Data quality warning:** sheet number(s) ${report.duplicateSheetNumbers.join(', ')} appeared on more than one extracted page — a real extraction defect, not a routing issue. Findings and Cross-Brand Watch entries under these sheet numbers may combine two unrelated physical pages. Verify against the source print before relying on citations to these sheet numbers.\n\n`;
+  }
 
   for (const section of report.sections) {
     md += `## ${section.title}\n\n`;
@@ -66,8 +71,9 @@ export function renderReportMarkdown(report, { projectName, generatedAt, diagnos
   return md;
 }
 
-// diagnostics: { triage, orderingMismatches, gapCheck, pagesExtracted, usage } — the non-report
-// fields of runPipelineFromPdf()'s return value. Internal QA record of how the report was
+// diagnostics: { triage, orderingMismatches, gapCheck, pagesExtracted, usageTotals } — usageTotals
+// is a pre-computed summary (see renderReportMarkdown's doc comment above), everything else comes
+// straight from runPipelineFromPdf()'s return value. Internal QA record of how the report was
 // produced, not itself a PM deliverable — kept in a clearly separated section for that reason.
 export function renderDiagnosticsMarkdown(diagnostics) {
   let md = `---\n\n## Appendix: Pipeline Diagnostics\n\n_Internal record of how this report was produced — not part of the findings above._\n\n`;
@@ -109,13 +115,18 @@ export function renderDiagnosticsMarkdown(diagnostics) {
     }
   }
 
-  if (diagnostics.usage) {
-    const stages = Object.entries(diagnostics.usage);
-    const totalIn = stages.reduce((sum, [, u]) => sum + u.inputTokens, 0);
-    const totalOut = stages.reduce((sum, [, u]) => sum + u.outputTokens, 0);
-    const estCost = (totalIn / 1e6) * 3 + (totalOut / 1e6) * 15;
+  if (diagnostics.usageTotals) {
+    // Pricing is computed exactly once, upstream (src/lib/extraction.js's estimateCostUSD) — this
+    // module only ever displays a number it's handed, never derives cost itself. Keeping pricing
+    // knowledge in one place is what a prior duplicated-and-drifted copy of this exact formula cost:
+    // a silently wrong (too-low) cost estimate once prompt caching activated.
+    const { inputTokens, outputTokens, cacheCreationInputTokens, cacheReadInputTokens, estimatedCostUSD } = diagnostics.usageTotals;
     md += `### Usage\n\n`;
-    md += `${totalIn.toLocaleString()} input tokens, ${totalOut.toLocaleString()} output tokens — est. $${estCost.toFixed(3)} (rough, verify current pricing)\n\n`;
+    md += `${inputTokens.toLocaleString()} input tokens, ${outputTokens.toLocaleString()} output tokens`;
+    if (cacheCreationInputTokens || cacheReadInputTokens) {
+      md += ` (cache write ${cacheCreationInputTokens.toLocaleString()}, cache read ${cacheReadInputTokens.toLocaleString()})`;
+    }
+    md += ` — est. $${estimatedCostUSD.toFixed(3)} (rough, verify current pricing)\n\n`;
   }
 
   return md;
