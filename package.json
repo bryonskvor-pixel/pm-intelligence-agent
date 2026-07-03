@@ -8,9 +8,16 @@
     "test:skyfold": "node src/specialists/test-skyfold.js",
     "test:smoke-guard": "node src/specialists/test-smoke-guard.js",
     "test:airolite": "node src/specialists/test-airolite.js",
-    "test:euro-wall": "node src/specialists/test-euro-wall.js"
+    "test:euro-wall": "node src/specialists/test-euro-wall.js",
+    "test:synthesis": "node src/synthesis/test-synthesis.js",
+    "test:extraction": "node src/lib/test-extraction.js",
+    "test:triage": "node src/lib/test-triage.js",
+    "test:gapcheck": "node src/lib/test-gapcheck.js",
+    "test:pipeline": "node src/pipeline/test-pipeline.js",
+    "test:render": "node src/render/test-render.js"
   },
   "dependencies": {
-    "@anthropic-ai/sdk": "^0.32.1"
+    "@anthropic-ai/sdk": "^0.32.1",
+    "pdf-lib": "^1.17.1"
   }
 }
