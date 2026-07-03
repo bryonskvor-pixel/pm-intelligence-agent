@@ -23,12 +23,22 @@ function normalizeUsage(rawUsage) {
   };
 }
 
+// userContent may be a plain string or an array of Anthropic content blocks (text + document) —
+// the specialists send content blocks when a sheet's original PDF page is attached alongside its
+// extracted text. A retry reminder is appended as a final text block in the array case.
+function withRetryReminder(userContent, retryReminder) {
+  if (!retryReminder) return userContent;
+  return Array.isArray(userContent)
+    ? [...userContent, { type: 'text', text: retryReminder }]
+    : `${userContent}\n\n${retryReminder}`;
+}
+
 async function callOnce(anthropic, { model, maxTokens, system, userContent }, retryReminder) {
   const message = await anthropic.messages.create({
     model,
     max_tokens: maxTokens,
     system,
-    messages: [{ role: 'user', content: retryReminder ? `${userContent}\n\n${retryReminder}` : userContent }],
+    messages: [{ role: 'user', content: withRetryReminder(userContent, retryReminder) }],
   });
   const usage = normalizeUsage(message.usage);
 

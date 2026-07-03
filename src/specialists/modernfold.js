@@ -1,6 +1,6 @@
 import Anthropic from '@anthropic-ai/sdk';
 import { d1Query, embedText, vectorizeQuery } from '../lib/cloudflare.js';
-import { normalizeSheets, formatSheetsBlock } from '../lib/sheets.js';
+import { normalizeSheets, formatSheetsBlock, buildDrawingInputBlocks } from '../lib/sheets.js';
 import { callAndParseJson } from '../lib/callAndParseJson.js';
 
 const PARAMS_DB_ID = '18812c7c-0661-4e87-beaa-926b18f13a67';
@@ -20,7 +20,7 @@ Ground your findings on: suspension systems (#14/#17/#30/RT100/RT200), STC ratin
 Watch specifically for: pocket dimensions that don't match the stack-depth formula for the selected model, electrical devices inside the stacking footprint, floor flatness affecting bottom seals, and finish selections that aren't actually available on the specified model's skin construction (e.g. laminate/wood veneer specified on Encore or Accordion, which don't support rigid finishes).
 
 You are given:
-1. DRAWING INPUT — text describing a drawing sheet or condition for this project.
+1. DRAWING INPUT — one or more sheets. A sheet may include the ORIGINAL DRAWING PAGE attached as a PDF in addition to its extracted text. When the page is attached, examine the drawing graphics themselves — plans, sections, details — not just the text: spatial conflicts (an electrical device drawn inside the stacking footprint, a pocket dimension that visibly can't hold the stack, another system occupying the same opening) are usually drawn, not written, and the extracted text may not mention them at all. Findings grounded on something visible in the graphics are valid — set sheet_reference to that sheet and describe where on the sheet the condition appears. The extracted text is a transcription aid, not the full picture.
 2. EXACT PARAMETERS — rows from the structured parameter store (D1). These are ground truth; never contradict or estimate around them.
 3. SEMANTIC CONTEXT — narrative spec/installation guidance chunks retrieved by similarity search. Use for judgment and failure-pattern matching, not as a source of exact numbers.
 
@@ -58,20 +58,32 @@ export async function runModernfoldSpecialist(sheetsInput) {
   const semanticMatches = await vectorizeQuery(VECTORIZE_INDEX, queryVector, { topK: 5, returnMetadata: 'all' });
 
   const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
-  const userContent = `DRAWING INPUT:\n${combinedText}\n\nEXACT PARAMETERS (D1):\n${JSON.stringify(params, null, 2)}\n\nSEMANTIC CONTEXT (Vectorize):\n${JSON.stringify(
-    semanticMatches.map((m) => ({ id: m.id, score: m.score, text: m.metadata?.text, section: m.metadata?.section })),
-    null,
-    2
-  )}`;
+  const { blocks: drawingBlocks, attachedPdfSheets, omittedPdfSheets } = buildDrawingInputBlocks(sheets);
+  if (omittedPdfSheets.length) {
+    console.error(`Modernfold specialist: PDF page attachment omitted for sheet(s) ${omittedPdfSheets.join(', ')} — per-call attachment byte budget exceeded; sent as extracted text only.`);
+  }
+  const userContent = [
+    { type: 'text', text: 'DRAWING INPUT:' },
+    ...drawingBlocks,
+    {
+      type: 'text',
+      text: `EXACT PARAMETERS (D1):\n${JSON.stringify(params, null, 2)}\n\nSEMANTIC CONTEXT (Vectorize):\n${JSON.stringify(
+        semanticMatches.map((m) => ({ id: m.id, score: m.score, text: m.metadata?.text, section: m.metadata?.section })),
+        null,
+        2
+      )}`,
+    },
+  ];
 
   const { result: findings } = await callAndParseJson(anthropic, {
     model: 'claude-sonnet-4-5-20250929',
-    maxTokens: 4096,
+    maxTokens: 8192,
     system: SYSTEM_PROMPT,
     userContent,
   });
   return {
     sheetsProcessed: sheets.map((s) => s.sheetNumber),
+    pdfPagesAttached: attachedPdfSheets,
     modelIdsDetected: modelIds,
     paramsUsed: params,
     semanticMatches,

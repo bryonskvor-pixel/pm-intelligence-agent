@@ -107,6 +107,9 @@ export async function runProjectSynthesis(projectSheets) {
     brand,
     sheetsUsed,
     modelIdsDetected: result.modelIdsDetected,
+    // Which sheets' original PDF pages the specialist actually saw (vs. extracted text only) —
+    // recorded so a report reader can tell whether graphical review happened for a given sheet.
+    pdfPagesAttached: result.pdfPagesAttached || [],
     findings: result.findings,
   }));
 

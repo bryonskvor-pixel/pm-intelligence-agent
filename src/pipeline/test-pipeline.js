@@ -38,6 +38,11 @@ async function main() {
     console.log(`  ${gap.targetSheet} referenced by ${gap.referencedBy.map((r) => r.fromSheet).join(', ')}`);
   }
 
+  console.log(`\n--- EXTRACTION WARNINGS: ${result.extractionWarnings.length} ---`);
+  for (const w of result.extractionWarnings) {
+    console.log(`  [${w.sheetNumber || `page ${w.pageIndex}`}] ${w.type}: ${w.detail}`);
+  }
+
   console.log('\n--- SIX-SECTION REPORT ---');
   for (const section of result.report.sections) {
     console.log(`${section.title}: ${section.findings.length} finding(s)`);
@@ -64,6 +69,7 @@ async function main() {
       triage: result.triage,
       orderingMismatches: result.orderingMismatches,
       gapCheck: result.gapCheck,
+      extractionWarnings: result.extractionWarnings,
       usageTotals,
     },
   });

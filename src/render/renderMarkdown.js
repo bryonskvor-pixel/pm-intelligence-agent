@@ -56,6 +56,9 @@ export function renderReportMarkdown(report, { projectName, generatedAt, diagnos
     md += `### ${b.brand}\n\n`;
     md += `- Sheets used: ${b.sheetsUsed.join(', ') || '(none)'}\n`;
     md += `- Models detected: ${(b.modelIdsDetected || []).join(', ') || '(none)'}\n`;
+    if (b.pdfPagesAttached?.length) {
+      md += `- Drawing pages reviewed as PDF (graphics, not just text): ${b.pdfPagesAttached.join(', ')}\n`;
+    }
     md += `- ${b.findings.length} finding(s) — see sections above for full detail.\n\n`;
   }
 
@@ -98,6 +101,14 @@ export function renderDiagnosticsMarkdown(diagnostics) {
     md += `### Ordering heuristic mismatches\n\n_Index-order-to-page-position assumption broke down for these pages — treat this run's sheet numbering with extra caution._\n\n`;
     for (const m of diagnostics.orderingMismatches) {
       md += `- Page ${m.pageIndex}: expected "${m.expected}", got "${m.actual}"\n`;
+    }
+    md += `\n`;
+  }
+
+  if (diagnostics.extractionWarnings?.length) {
+    md += `### Extraction warnings\n\n_Per-sheet guard flags — noisy tags dropped, misaligned schedules, suspiciously thin extractions. Verify flagged sheets against the source print before relying on citations to them._\n\n`;
+    for (const w of diagnostics.extractionWarnings) {
+      md += `- **${w.sheetNumber || `page ${w.pageIndex}`}** [${w.type}]: ${w.detail}\n`;
     }
     md += `\n`;
   }

@@ -1,4 +1,5 @@
 import { extractSheetsFromPdf } from '../lib/extraction.js';
+import { splitPdfIntoPages } from '../lib/pdfSplit.js';
 import { triageFromIndexText } from '../lib/triage.js';
 import { findMissingCrossReferences } from '../lib/gapCheck.js';
 import { normalizeSheetNumber } from '../lib/sheetNumber.js';
@@ -91,9 +92,27 @@ export async function runPipelineFromPdf(pdfBytes, { indexPageIndex = 0 } = {}) 
 
   const { gaps, excludedNonSheetReferences } = findMissingCrossReferences(candidateSheets);
 
+  // Aggregate the per-sheet guard warnings (noisy tags, schedule misalignment, thin extraction)
+  // into one pipeline-level list so they surface in diagnostics instead of living only on the
+  // sheet objects where nobody looks after synthesis.
+  const extractionWarnings = candidateSheets.flatMap((s) =>
+    (s.extractionWarnings || []).map((w) => ({ sheetNumber: s.sheetNumber, pageIndex: s.pageIndex, ...w }))
+  );
+
+  // Each sheet carries its original single-page PDF into synthesis so the brand specialists can
+  // read the drawing itself, not just its transcription — spatial conflicts (obstructions in a
+  // travel path, clearances) are drawn, not written, and rawText alone can't carry them.
+  // Splitting is local/free (pdf-lib, no API call), same as inside extractSheetsFromPdf.
+  const pageBytesByIndex = await splitPdfIntoPages(pdfBytes);
+
   const synthesisSheets = candidateSheets
     .filter((s) => s.sheetNumber)
-    .map((s) => ({ sheetNumber: s.sheetNumber, revision: s.revision, text: s.rawText }));
+    .map((s) => ({
+      sheetNumber: s.sheetNumber,
+      revision: s.revision,
+      text: s.rawText,
+      pageBytes: s.pageIndex != null ? pageBytesByIndex[s.pageIndex] : undefined,
+    }));
   const report = await runProjectSynthesis(synthesisSheets);
 
   return {
@@ -101,6 +120,7 @@ export async function runPipelineFromPdf(pdfBytes, { indexPageIndex = 0 } = {}) 
     triage: { perBrand: triageResult, unresolvedCandidates, pageOffset },
     orderingMismatches,
     gapCheck: { gaps, excludedNonSheetReferences },
+    extractionWarnings,
     pagesExtracted,
     usage: { index: indexUsage, triage: triageUsage, extraction: extractionUsage },
   };

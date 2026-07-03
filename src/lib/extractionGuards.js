@@ -65,6 +65,44 @@ export function validateSchedules(sheet) {
   return { ...sheet, schedules, extractionWarnings: [...(sheet.extractionWarnings || []), ...warnings] };
 }
 
+// Tripwire for silent resolution/legibility failures. Large-format (24x36+) sheets get
+// downscaled on PDF input, and the model transcribes what it can resolve without knowing what
+// it couldn't — so a sheet rendered too small to read comes back not as an error but as a
+// suspiciously *thin* extraction. These heuristics flag that shape so the failure is visible
+// the first time it actually happens, instead of silently feeding an empty transcript to
+// correlation and the specialists. Flags only — nothing is dropped or corrected.
+export function flagThinExtraction(sheet) {
+  // Pages with no sheet number (blank/divider/unreadable) already explain themselves via the
+  // extraction prompt's "notes" field — thinness is expected there, not a warning sign.
+  if (!sheet.sheetNumber) return sheet;
+
+  const warnings = [];
+  const title = (sheet.title || '').toUpperCase();
+  const rawTextLength = (sheet.rawText || '').length;
+
+  if (title.includes('SCHEDULE') && !(sheet.schedules || []).length) {
+    warnings.push({
+      type: 'thin_extraction',
+      detail: `Sheet is titled "${sheet.title}" but no schedules were extracted — a schedule sheet with zero tables suggests the page rendered too small to read. Verify against the source page.`,
+    });
+  }
+  if (title.includes('PLAN') && !title.includes('SCHEDULE') && !(sheet.tags || []).length && rawTextLength < 800) {
+    warnings.push({
+      type: 'thin_extraction',
+      detail: `Sheet is titled "${sheet.title}" but extraction returned no tags and only ${rawTextLength} characters of text — plans normally carry room/equipment tags. Possible legibility/resolution failure; verify against the source page.`,
+    });
+  }
+  if (rawTextLength < 300) {
+    warnings.push({
+      type: 'thin_extraction',
+      detail: `Extraction returned only ${rawTextLength} characters of raw text for a titled drawing sheet — suspiciously thin. Possible legibility/resolution failure; verify against the source page.`,
+    });
+  }
+
+  if (!warnings.length) return sheet;
+  return { ...sheet, extractionWarnings: [...(sheet.extractionWarnings || []), ...warnings] };
+}
+
 export function applyExtractionGuards(sheets, options = {}) {
-  return sheets.map((sheet) => validateSchedules(filterNoisyTags(sheet, options)));
+  return sheets.map((sheet) => flagThinExtraction(validateSchedules(filterNoisyTags(sheet, options))));
 }
