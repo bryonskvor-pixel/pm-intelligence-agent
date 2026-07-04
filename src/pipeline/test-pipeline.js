@@ -43,9 +43,26 @@ async function main() {
     console.log(`  [${w.sheetNumber || `page ${w.pageIndex}`}] ${w.type}: ${w.detail}`);
   }
 
-  console.log('\n--- SIX-SECTION REPORT ---');
+  // Persist the raw result before any printing/rendering — a display bug must never cost a
+  // paid pipeline run its output (pageBytes never reach the report object, so this is safe JSON).
+  fs.writeFileSync('pipeline_result.json', JSON.stringify(result, null, 2));
+  console.log('\nRaw result saved to pipeline_result.json');
+
+  console.log('\n--- BID QUALIFICATION PACKAGE ---');
   for (const section of result.report.sections) {
-    console.log(`${section.title}: ${section.findings.length} finding(s)`);
+    if (section.rfis) {
+      console.log(`${section.title}: ${section.rfis.length} RFI(s) (${section.rfis.filter((r) => r.bid_gating).length} bid-gating)`);
+    } else if (section.unresolved) {
+      const u = section.unresolved;
+      console.log(
+        `${section.title}: ${u.gapCheckGaps.length} gap(s), ${u.unresolvedTriageCandidates.length} unresolved candidate(s), ${u.orderingMismatches.length} ordering mismatch(es), ${u.escalations.length} escalation(s)`
+      );
+    } else {
+      console.log(`${section.title}: ${section.findings.length} finding(s)`);
+    }
+  }
+  for (const section of result.report.appendixSections || []) {
+    console.log(`[appendix] ${section.title}: ${section.findings.length} finding(s)`);
   }
   console.log('Cross-brand watch:', result.report.crossBrandWatch.length, 'sheet(s)');
   console.log('Brand appendix:', result.report.brandAppendix.map((b) => b.brand).join(', ') || '(none — no brand matched any extracted sheet)');

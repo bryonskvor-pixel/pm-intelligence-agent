@@ -7,6 +7,7 @@ node_modules/
 extraction_output.json
 *.log
 pipeline_report.md
+pipeline_result.json
 sample_report.md
 
 # Client project source PDFs — real project material, not tool source, don't belong in git history
