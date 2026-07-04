@@ -2,6 +2,7 @@ import Anthropic from '@anthropic-ai/sdk';
 import { d1Query, embedText, vectorizeQuery } from '../lib/cloudflare.js';
 import { normalizeSheets, formatSheetsBlock, buildDrawingInputBlocks } from '../lib/sheets.js';
 import { callAndParseJson } from '../lib/callAndParseJson.js';
+import { guardFindings } from '../lib/findingsGuard.js';
 
 const PARAMS_DB_ID = '18812c7c-0661-4e87-beaa-926b18f13a67';
 const VECTORIZE_INDEX = 'pm-intel-skyfold';
@@ -26,17 +27,22 @@ You are given:
 1. DRAWING INPUT — one or more sheets. A sheet may include the ORIGINAL DRAWING PAGE attached as a PDF in addition to its extracted text. When the page is attached, examine the drawing graphics themselves — plans, sections, details — not just the text: spatial conflicts (an obstruction drawn across a travel path, inadequate clearance, another system occupying the same opening) are usually drawn, not written, and the extracted text may not mention them at all. Findings grounded on something visible in the graphics are valid — set sheet_reference to that sheet and describe where on the sheet the condition appears. The extracted text is a transcription aid, not the full picture.
 2. EXACT PARAMETERS — rows from the structured parameter store (D1). These are ground truth; never contradict or estimate around them. SKYFOLD-GENERAL rows apply across all Skyfold models unless a model-specific row overrides them.
 3. SEMANTIC CONTEXT — narrative spec/installation guidance chunks retrieved by similarity search. Use for judgment and failure-pattern matching, not as a source of exact numbers.
+4. REQUIRED CONDITIONS — rows from the required-conditions store (D1): conditions the drawings MUST show for this product to be biddable. Verify each one appears somewhere in the drawing input — any sheet, primary or context — and flag every one that does not as an absence finding (Track 2 below).
 
 Produce a JSON array of findings. Each finding must have:
 - "finding_type": one of "estimating_flag", "critical_path", "risk", "preconstruction_checklist", "measure_day_checklist", "installation_briefing"
 - "description": the finding itself, in plain PM language
 - "citation": the source_doc and parameter_name/section this is grounded on (cite D1 source_doc fields and/or Vectorize chunk ids)
-- "sheet_reference": the SHEET number (from the "--- SHEET ... ---" markers in the drawing input) this finding is grounded on. If the input has only one unmarked sheet, use "UNSPECIFIED".
+- "sheet_reference": the SHEET number (from the "--- SHEET ... ---" markers in the drawing input) this finding is grounded on. If the input has only one unmarked sheet, use "UNSPECIFIED". For an absence finding, use "ABSENT".
+- "evidence_type": exactly one of "TEXT_READ" (condition/value transcribed from sheet text), "SCHEDULE_EXTRACTED" (read from a schedule or table), "SYMBOL_INTERPRETED" (interpreted from a drawing symbol, tag, or legend), "GEOMETRY_INFERRED" (inferred from drawn geometry, scale, or spatial relationships), "CROSS_REFERENCE" (grounded on a reference between sheets), "ABSENCE" (a required condition found on no provided sheet). Mandatory on every finding. Any GEOMETRY_INFERRED finding is automatically demoted to a field-verification item downstream and must never state a measurement value.
 - "consequence": what happens if uncaught (only for risk/estimating_flag types; omit otherwise)
 
 The drawing input may contain multiple sheets, each preceded by a "--- SHEET <number> rev <revision> ---" marker. Ground every finding in the specific sheet it came from and set "sheet_reference" accordingly.
 Each sheet marker may also carry a role tag: [PRIMARY] or [CONTEXT]. PRIMARY sheets are where your product is specified or expected to live. CONTEXT sheets are the rest of the project's extracted set — structural, mechanical, electrical, fire alarm, and other disciplines — included because your product's requirements often hide on sheets that never mention the product by name (overhead support steel, deflection criteria, plenum obstructions, 3-phase power circuits). Read every context sheet for conditions that affect your product; findings grounded on context sheets are expected and are often the most valuable findings you can produce. A sheet with no role tag is primary.
-If the input doesn't contain enough information to ground a finding in evidence, do not invent one — return fewer findings rather than speculate.
+Findings follow a two-track evidence contract:
+- Track 1 — positive findings: must be grounded in evidence actually present in the input (text or graphics). Never invented. If the input doesn't contain enough evidence to ground a positive finding, do not invent one — return fewer findings rather than speculate.
+- Track 2 — absence findings: grounded in a REQUIRED CONDITIONS row PLUS your confirmation that the condition appears on NO sheet in the input — primary or context. These are first-class findings and often the most valuable in the report. For each: set "evidence_type" to "ABSENCE", cite the required-condition row (its condition and source_doc) in "citation", state in "description" that the condition was not found on any provided sheet plus its absence consequence, and set "sheet_reference" to "ABSENT". Absence findings are valid because routing guarantees you receive the project's full extracted sheet set; the claim is always scoped to the provided input.
+Never output a quantity, count, dimension, or measurement that you computed, inferred, estimated, or read from drawing geometry. You may quote a value exactly as written on a sheet or exactly as stored in D1. If a drawn value conflicts with a D1 parameter or formula, state the discrepancy, cite both values verbatim, and phrase the resolution as an RFI or field-verify item — do not state what the correct value 'should be.' This prohibition covers derived values of every kind: unit conversions, arithmetic illustrations (e.g. converting an L/-ratio to inches at a given span), computed areas or footprints, and computed percentage differences. Cite the conflicting source values exactly as written and state that they conflict — never do the math to show by how much.
 Output must be valid JSON: when writing inch measurements inside string values, always write "in." instead of the " symbol, since an unescaped " inside a JSON string breaks parsing.
 Respond with ONLY the JSON array, no prose, no markdown code fences.`;
 
@@ -68,6 +74,14 @@ export async function runSkyfoldSpecialist(sheetsInput) {
     modelIds
   );
 
+  // modelIds already includes SKYFOLD-GENERAL via expandForD1, which is also the brand-general
+  // required-conditions key — same id list works for both queries.
+  const requiredConditions = await d1Query(
+    PARAMS_DB_ID,
+    `SELECT model_id, condition, where_expected, absence_consequence, source_doc FROM required_conditions WHERE brand = 'Skyfold' AND model_id IN (${placeholders})`,
+    modelIds
+  );
+
   const [queryVector] = await embedText([combinedText]);
   const semanticMatches = await vectorizeQuery(VECTORIZE_INDEX, queryVector, { topK: 5, returnMetadata: 'all' });
 
@@ -85,22 +99,26 @@ export async function runSkyfoldSpecialist(sheetsInput) {
         semanticMatches.map((m) => ({ id: m.id, score: m.score, text: m.metadata?.text, section: m.metadata?.section })),
         null,
         2
-      )}`,
+      )}\n\nREQUIRED CONDITIONS (D1) — verify each appears somewhere in the drawing input; flag every one that does not:\n${JSON.stringify(requiredConditions, null, 2)}`,
     },
   ];
 
-  const { result: findings } = await callAndParseJson(anthropic, {
+  const { result: rawFindings } = await callAndParseJson(anthropic, {
     model: 'claude-sonnet-4-5-20250929',
     maxTokens: 8192,
     system: SYSTEM_PROMPT,
     userContent,
   });
+  const { findings, warnings: guardWarnings } = guardFindings(rawFindings);
+  for (const w of guardWarnings) console.error(`Skyfold findings guard [${w.type}]: ${w.detail}`);
   return {
     sheetsProcessed: sheets.map((s) => s.sheetNumber),
     pdfPagesAttached: attachedPdfSheets,
     modelIdsDetected: modelIds,
     paramsUsed: params,
+    requiredConditionsUsed: requiredConditions,
     semanticMatches,
     findings,
+    guardWarnings,
   };
 }

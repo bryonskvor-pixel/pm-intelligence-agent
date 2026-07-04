@@ -1,4 +1,5 @@
 import { runProjectSynthesis } from './report.js';
+import { EVIDENCE_TYPES } from '../lib/findingsGuard.js';
 
 const PROJECT_SHEETS = [
   {
@@ -57,7 +58,7 @@ async function main() {
   for (const section of report.sections) {
     console.log(`\n## ${section.title} (${section.findings.length})`);
     for (const f of section.findings) {
-      console.log(`- [${f.brand} / ${f.sheet_reference}] ${f.description}`);
+      console.log(`- [${f.brand} / ${f.sheet_reference} / ${f.evidence_type}] ${f.description}`);
       console.log(`  citation: ${f.citation}`);
       if (f.consequence) console.log(`  consequence: ${f.consequence}`);
     }
@@ -69,6 +70,18 @@ async function main() {
     for (const f of c.findings) {
       console.log(`- [${f.brand}] ${f.description}`);
     }
+  }
+
+  // Phase 2 acceptance: every finding must carry a valid evidence_type.
+  const allFindings = report.brandAppendix.flatMap((b) => b.findings || []);
+  const invalid = allFindings.filter((f) => !EVIDENCE_TYPES.includes(f.evidence_type));
+  const absences = allFindings.filter((f) => f.evidence_type === 'ABSENCE');
+  console.log(`\n--- EVIDENCE TYPING ---`);
+  console.log(`${allFindings.length} findings total, ${absences.length} ABSENCE findings, ${invalid.length} invalid evidence_type values`);
+  if (invalid.length) {
+    for (const f of invalid) console.log(`  INVALID: [${f.finding_type}] evidence_type=${JSON.stringify(f.evidence_type)} — ${f.description}`);
+    console.error('\nEvidence typing check FAILED');
+    process.exit(1);
   }
 }
 
