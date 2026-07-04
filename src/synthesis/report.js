@@ -4,6 +4,7 @@ import { detectModelIds as detectEuroWall, runEuroWallSpecialist } from '../spec
 import { detectModelIds as detectAirolite, runAiroliteSpecialist } from '../specialists/airolite.js';
 import { detectModelIds as detectSmokeGuard, runSmokeGuardSpecialist } from '../specialists/smoke-guard.js';
 import { normalizeSheetNumber } from '../lib/sheetNumber.js';
+import { reconcileFindings } from './reconcile.js';
 
 const BRANDS = [
   { name: 'Modernfold', detect: detectModernfold, run: runModernfoldSpecialist },
@@ -114,7 +115,11 @@ function dedupeFindings(findings) {
 
 // projectSheets: [{ sheetNumber, revision, text, pageBytes? }]
 // opts.triageCandidates: { [brandName]: string[] } — see routeSheets.
-export async function runProjectSynthesis(projectSheets, { triageCandidates = {} } = {}) {
+// opts.sheetInventory: [{ sheetNumber, title, discipline }] — the full extracted set with the
+//   titles/disciplines the PDF pipeline read; when absent (hand-typed test sets calling this
+//   directly), a numbers-only inventory is derived from projectSheets.
+// opts.gapCheck: { gaps } from findMissingCrossReferences, or null when the caller has none.
+export async function runProjectSynthesis(projectSheets, { triageCandidates = {}, sheetInventory = null, gapCheck = null } = {}) {
   const { brandSheets, unclassified, multiProductSheets, duplicateSheetNumbers } = routeSheets(projectSheets, {
     triageCandidates,
   });
@@ -137,16 +142,45 @@ export async function runProjectSynthesis(projectSheets, { triageCandidates = {}
   );
   const deduped = dedupeFindings(allFindings);
 
+  // Phase 3: one reconciliation pass between the specialists and sectioning. Exact-string dedupe
+  // above catches identical text; the reconciler catches the same condition phrased two ways,
+  // plus contradictions, absence escalations, and the generic-filler cull — all recorded on
+  // report.reconciliation, nothing silently deleted. If the call fails, the report still ships
+  // with the un-reconciled findings and the error surfaced, rather than throwing away five
+  // specialists' worth of completed (paid) work.
+  let reconciled = deduped;
+  let reconciliation = null;
+  if (deduped.length) {
+    const requiredConditions = specialistResults.flatMap(({ brand, result }) =>
+      (result.requiredConditionsUsed || []).map((rc) => ({ brand, ...rc }))
+    );
+    try {
+      const rec = await reconcileFindings({
+        findings: deduped,
+        sheetInventory:
+          sheetInventory || projectSheets.map((s) => ({ sheetNumber: s.sheetNumber, title: null, discipline: null })),
+        gapCheck,
+        multiProductSheets,
+        requiredConditions,
+      });
+      reconciled = rec.findings;
+      reconciliation = { ...rec.reconciliation, usage: rec.usage };
+    } catch (err) {
+      console.error(`Reconciliation failed — report ships un-reconciled: ${err.message}`);
+      reconciliation = { error: err.message };
+    }
+  }
+
   const sections = REPORT_SECTIONS.map(({ key, title }) => ({
     key,
     title,
-    findings: deduped.filter((f) => f.finding_type === key),
+    findings: reconciled.filter((f) => f.finding_type === key),
   }));
 
   const crossBrandWatch = multiProductSheets.map(({ sheetNumber, brands }) => ({
     sheetNumber,
     brands,
-    findings: deduped.filter((f) => f.sheet_reference === sheetNumber),
+    findings: reconciled.filter((f) => f.sheet_reference === sheetNumber),
   }));
 
   const brandAppendix = specialistResults.map(({ brand, primarySheets, contextSheets, result }) => ({
@@ -166,6 +200,11 @@ export async function runProjectSynthesis(projectSheets, { triageCandidates = {}
     sections,
     crossBrandWatch,
     brandAppendix,
+    // Phase 3 reconciliation output: contradictions, corroborations (merged findings recorded on
+    // the kept finding's corroborated_by), escalations, the generic-filler cull (culled findings
+    // recorded in full), and derived-value flags. null when no findings were produced;
+    // { error } when the reconciler call itself failed and findings shipped un-reconciled.
+    reconciliation,
     // Sheets that were primary for no brand. They still went to every firing specialist as
     // context — listed here so a reader knows no brand claimed them, not that they were dropped.
     unclassifiedSheets: unclassified,

@@ -122,7 +122,14 @@ export async function runPipelineFromPdf(pdfBytes, { indexPageIndex = 0 } = {}) 
   for (const brand of BRAND_NAMES) {
     triageCandidates[brand] = triageResult[brand]?.candidateSheetNumbers || [];
   }
-  const report = await runProjectSynthesis(synthesisSheets, { triageCandidates });
+  // The reconciler (inside runProjectSynthesis) needs the full extracted inventory with titles/
+  // disciplines (to judge whether an absence finding's where_expected sheet type is missing from
+  // the set entirely) and the gap-check results — pass both, since a direct synthesis call
+  // wouldn't have them.
+  const sheetInventory = candidateSheets
+    .filter((s) => s.sheetNumber)
+    .map((s) => ({ sheetNumber: s.sheetNumber, title: s.title ?? null, discipline: s.discipline ?? null }));
+  const report = await runProjectSynthesis(synthesisSheets, { triageCandidates, sheetInventory, gapCheck: { gaps } });
 
   return {
     report,

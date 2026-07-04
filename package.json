@@ -12,6 +12,7 @@
     "test:routing": "node src/synthesis/test-routing.js",
     "test:findings-guard": "node src/lib/test-findings-guard.js",
     "test:absence": "node --env-file=.env.local --env-file=.cloudflare.env src/specialists/test-absence.js",
+    "test:reconcile": "node --env-file=.env.local --env-file=.cloudflare.env src/synthesis/test-reconcile.js",
     "test:synthesis": "node src/synthesis/test-synthesis.js",
     "test:extraction": "node src/lib/test-extraction.js",
     "test:triage": "node src/lib/test-triage.js",

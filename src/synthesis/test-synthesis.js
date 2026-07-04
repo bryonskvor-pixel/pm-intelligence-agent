@@ -72,6 +72,27 @@ async function main() {
     }
   }
 
+  console.log('\n--- RECONCILIATION (Phase 3) ---');
+  if (!report.reconciliation) {
+    console.log('No reconciliation ran (no findings).');
+  } else if (report.reconciliation.error) {
+    console.error(`Reconciliation errored — report shipped un-reconciled: ${report.reconciliation.error}`);
+    process.exit(1);
+  } else {
+    const r = report.reconciliation;
+    console.log(`Contradictions: ${r.contradictions.length}`);
+    for (const c of r.contradictions) console.log(`- [${c.finding_ids.join(', ')} / sheets ${c.sheets.join(', ')}] ${c.description}`);
+    console.log(`Corroborations (merged): ${r.corroborations.length}`);
+    for (const c of r.corroborations) console.log(`- kept ${c.keep_id}, merged ${c.merged_ids.join(', ')}: ${c.note || ''}`);
+    console.log(`Escalations: ${r.escalations.length}`);
+    for (const e of r.escalations) console.log(`- ${e.finding_id} (missing sheet types: ${e.missing_sheet_types.join('; ')}): ${e.rationale}`);
+    console.log(`Culled: ${r.culled.length}`);
+    for (const c of r.culled) console.log(`- [${c.finding.brand}] "${c.finding.description}" — ${c.reason}`);
+    console.log(`Derived-value flags: ${r.derivedValueFlags.length}`);
+    for (const d of r.derivedValueFlags) console.log(`- ${d.finding_id}: "${d.value}" — ${d.reason}`);
+    if (r.warnings.length) console.log(`Guard warnings: ${r.warnings.length} (see stderr)`);
+  }
+
   // Phase 2 acceptance: every finding must carry a valid evidence_type.
   const allFindings = report.brandAppendix.flatMap((b) => b.findings || []);
   const invalid = allFindings.filter((f) => !EVIDENCE_TYPES.includes(f.evidence_type));
