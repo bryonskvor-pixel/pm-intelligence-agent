@@ -14,12 +14,26 @@ const BRANDS = [
   { name: 'Smoke Guard', detect: detectSmokeGuard, run: runSmokeGuardSpecialist },
 ];
 
-const REPORT_SECTIONS = [
+// Phase 4 (Remediation Work Order): the report is a bid qualification package. Sections 1-6 and
+// their order are contractual — the rendered report must OPEN with them in exactly this order.
+// Estimating Flags and Critical Path / Lag are bid-time content the work order's section list
+// doesn't place; they render after the six-section package (before the Brand Appendix) so no
+// finding is lost, without disturbing the mandated opening order.
+export const REPORT_SECTIONS = [
+  { key: 'whats_not_shown', title: "What the Drawings Don't Show" },
+  { key: 'rfi_list', title: 'RFI List (before pricing)' },
+  { key: 'qualification', title: 'Proposal Qualifications' },
+  { key: 'field_verification', title: 'Field Verification List' },
+  { key: 'risk_register', title: 'Risk Register' },
+  { key: 'unresolved', title: 'Unresolved Items' },
   { key: 'estimating_flag', title: 'Estimating Flags' },
   { key: 'critical_path', title: 'Critical Path / Lag' },
-  { key: 'risk', title: 'Risk Register' },
+];
+
+// Install-phase value, not bid-time — rendered as appendix sections so they don't crowd the
+// qualification package (work order Phase 4).
+export const APPENDIX_SECTIONS = [
   { key: 'preconstruction_checklist', title: 'Preconstruction Checklist' },
-  { key: 'measure_day_checklist', title: 'Measure Day Checklist' },
   { key: 'installation_briefing', title: 'Installation Briefing' },
 ];
 
@@ -119,7 +133,11 @@ function dedupeFindings(findings) {
 //   titles/disciplines the PDF pipeline read; when absent (hand-typed test sets calling this
 //   directly), a numbers-only inventory is derived from projectSheets.
 // opts.gapCheck: { gaps } from findMissingCrossReferences, or null when the caller has none.
-export async function runProjectSynthesis(projectSheets, { triageCandidates = {}, sheetInventory = null, gapCheck = null } = {}) {
+// opts.unresolvedCandidates: sheet numbers triage named but couldn't map to a page (Phase 4:
+//   surfaced in Unresolved Items, not only in pipeline diagnostics).
+// opts.orderingMismatches: [{ pageIndex, expected, actual }] index-order mismatches that
+//   survived extraction (Phase 4: same promotion).
+export async function runProjectSynthesis(projectSheets, { triageCandidates = {}, sheetInventory = null, gapCheck = null, unresolvedCandidates = [], orderingMismatches = [] } = {}) {
   const { brandSheets, unclassified, multiProductSheets, duplicateSheetNumbers } = routeSheets(projectSheets, {
     triageCandidates,
   });
@@ -171,16 +189,83 @@ export async function runProjectSynthesis(projectSheets, { triageCandidates = {}
     }
   }
 
-  const sections = REPORT_SECTIONS.map(({ key, title }) => ({
-    key,
-    title,
-    findings: reconciled.filter((f) => f.finding_type === key),
-  }));
-
   const crossBrandWatch = multiProductSheets.map(({ sheetNumber, brands }) => ({
     sheetNumber,
     brands,
     findings: reconciled.filter((f) => f.sheet_reference === sheetNumber),
+  }));
+
+  // Section 1 owns every ABSENCE finding (plus reconciler escalations, which are ABSENCE findings
+  // annotated escalated: true). The finding_type-keyed sections below exclude ABSENCE findings so
+  // one absence doesn't render three times; the RFI List and Proposal Qualifications sections are
+  // deliverables that must be complete as-is, so they take their finding types regardless of
+  // evidence type.
+  const isAbsence = (f) => f.evidence_type === 'ABSENCE';
+
+  // RFI List: specialist-drafted "rfi" findings plus the reconciler's generated drafts, one flat
+  // list ordered bid-gating first (stable within each group). Numbering (RFI-01...) happens in
+  // the renderer.
+  const specialistRfis = reconciled
+    .filter((f) => f.finding_type === 'rfi')
+    .map((f) => ({
+      source: 'specialist',
+      source_finding_id: f.id ?? null,
+      brand: f.brand,
+      rfi_subject: f.rfi_subject || '',
+      references: Array.isArray(f.references) ? f.references.map(String) : f.references ? [String(f.references)] : [],
+      question: f.question || '',
+      bid_impact: f.bid_impact || '',
+      bid_gating: f.bid_gating === true,
+      evidence_type: f.evidence_type,
+      source_citation: f.citation,
+    }));
+  const reconcilerRfis = (reconciliation?.rfis || []).map((r) => ({ source: 'reconciler', ...r }));
+  const allRfis = [...specialistRfis, ...reconcilerRfis];
+  const rfis = [...allRfis.filter((r) => r.bid_gating), ...allRfis.filter((r) => !r.bid_gating)];
+
+  // Unresolved Items (required section, even when empty): gap-check's referenced-but-missing
+  // sheets promoted out of the diagnostics appendix, unresolved triage candidates, surviving
+  // ordering mismatches, and reconciler escalations.
+  const unresolved = {
+    gapCheckGaps: gapCheck?.gaps || [],
+    unresolvedTriageCandidates: unresolvedCandidates,
+    orderingMismatches,
+    escalations: reconciliation?.escalations || [],
+  };
+
+  const sections = REPORT_SECTIONS.map(({ key, title }) => {
+    switch (key) {
+      case 'whats_not_shown':
+        return { key, title, findings: reconciled.filter(isAbsence) };
+      case 'rfi_list':
+        return { key, title, rfis };
+      case 'qualification':
+        return { key, title, findings: reconciled.filter((f) => f.finding_type === 'qualification') };
+      case 'field_verification':
+        // The measure-day checklist bucket — findingsGuard already demotes GEOMETRY_INFERRED
+        // findings into it, so no extra plumbing here.
+        return { key, title, findings: reconciled.filter((f) => f.finding_type === 'measure_day_checklist' && !isAbsence(f)) };
+      case 'risk_register':
+        // Risk findings plus the reconciler's contradictions; Cross-Brand Watch folds in here
+        // (work order Phase 4) instead of rendering as its own section.
+        return {
+          key,
+          title,
+          findings: reconciled.filter((f) => f.finding_type === 'risk' && !isAbsence(f)),
+          contradictions: reconciliation?.contradictions || [],
+          crossBrandWatch,
+        };
+      case 'unresolved':
+        return { key, title, unresolved };
+      default:
+        return { key, title, findings: reconciled.filter((f) => f.finding_type === key && !isAbsence(f)) };
+    }
+  });
+
+  const appendixSections = APPENDIX_SECTIONS.map(({ key, title }) => ({
+    key,
+    title,
+    findings: reconciled.filter((f) => f.finding_type === key && !isAbsence(f)),
   }));
 
   const brandAppendix = specialistResults.map(({ brand, primarySheets, contextSheets, result }) => ({
@@ -198,6 +283,9 @@ export async function runProjectSynthesis(projectSheets, { triageCandidates = {}
 
   return {
     sections,
+    // Install-phase sections (preconstruction checklist, installation briefing) — rendered after
+    // the Brand Appendix so they don't crowd the bid qualification package.
+    appendixSections,
     crossBrandWatch,
     brandAppendix,
     // Phase 3 reconciliation output: contradictions, corroborations (merged findings recorded on

@@ -8,10 +8,144 @@ function sheetTag(f) {
 }
 
 function renderFinding(f) {
-  let md = `- **[${f.brand}${sheetTag(f)}]** ${f.description}\n`;
+  const escalated = f.escalated ? '**ESCALATED** — ' : '';
+  let md = `- **[${f.brand}${sheetTag(f)}]** ${escalated}${f.description}\n`;
   md += `  - *Citation:* ${f.citation}\n`;
   if (f.consequence) md += `  - *Consequence:* ${f.consequence}\n`;
+  if (f.demoted_from) md += `  - *Demoted from ${f.demoted_from}:* geometry-inferred — field-verify, never price from this.\n`;
+  // Phase 3 reconciliation annotations, rendered where the PM reads (Phase 4).
+  for (const c of f.corroborated_by || []) {
+    md += `  - *Corroborated by ${c.brand}${c.sheet_reference && c.sheet_reference !== 'UNSPECIFIED' ? ` / ${c.sheet_reference}` : ''}:* ${c.description}\n`;
+  }
+  if (f.corroboration_note) md += `  - *Corroboration note:* ${f.corroboration_note}\n`;
+  if (f.derived_value_flag) {
+    md += `  - *⚠ Derived-value flag:* "${f.derived_value_flag.value}" — ${f.derived_value_flag.reason}\n`;
+  }
   return md;
+}
+
+// RFI List (Phase 4): numbered ready-to-issue drafts, bid-gating items first (the report object
+// already carries them in that order — this renderer only numbers and formats).
+function renderRfiSection(section) {
+  let md = '';
+  if (!section.rfis.length) {
+    md += `_No RFIs — no discrepancy or absence finding required one._\n\n`;
+    return md;
+  }
+  section.rfis.forEach((r, i) => {
+    const num = `RFI-${String(i + 1).padStart(2, '0')}`;
+    md += `### ${num} — ${r.rfi_subject || '(no subject)'}${r.bid_gating ? ' **[BID-GATING]**' : ''}\n\n`;
+    md += `- **References:** ${r.references.length ? r.references.join(', ') : '(none cited)'}\n`;
+    md += `- **Question:** ${r.question}\n`;
+    md += `- **Bid impact:** ${r.bid_impact}\n`;
+    md += `- *Evidence type:* ${r.evidence_type} — *drafted by ${r.source === 'reconciler' ? 'reconciler from a' : 'the'} ${r.brand} ${r.source === 'reconciler' ? 'finding' : 'specialist'}*\n`;
+    if (r.source_citation) md += `- *Underlying citation:* ${r.source_citation}\n`;
+    md += `\n`;
+  });
+  return md;
+}
+
+// Risk Register (Phase 4): risk findings, plus the reconciler's contradictions, plus the folded-in
+// Cross-Brand Watch content — one section, so cross-system risk isn't scattered.
+function renderRiskRegisterSection(section) {
+  let md = '';
+  const empty = !section.findings.length && !(section.contradictions || []).length && !(section.crossBrandWatch || []).length;
+  if (empty) {
+    md += `_No findings in this category._\n\n`;
+    return md;
+  }
+  for (const f of section.findings) md += renderFinding(f);
+  if (section.findings.length) md += `\n`;
+
+  if (section.contradictions?.length) {
+    md += `### Contradictions (reconciler)\n\n_Sheets or findings that conflict — resolve before pricing the affected scope._\n\n`;
+    for (const c of section.contradictions) {
+      md += `- **[Sheets ${c.sheets.join(', ')}]** ${c.description}\n`;
+      if (c.citation) md += `  - *Citation:* ${c.citation}\n`;
+      md += `  - *Findings involved:* ${c.finding_ids.join(', ')}\n`;
+    }
+    md += `\n`;
+  }
+
+  if (section.crossBrandWatch?.length) {
+    md += `### Cross-brand interactions\n\n_Sheets relevant to more than one brand — findings grouped by sheet so interactions between systems aren't buried in separate brand sections._\n\n`;
+    for (const c of section.crossBrandWatch) {
+      md += `**Sheet ${c.sheetNumber} (${c.brands.join(' + ')})**\n\n`;
+      for (const f of c.findings) md += `- **[${f.brand}]** ${f.description}\n`;
+      md += `\n`;
+    }
+  }
+  return md;
+}
+
+// Unresolved Items (Phase 4): REQUIRED section — renders its "none" line rather than being
+// omitted, so its absence from a report is itself a signal. gapCheck's referenced-but-missing
+// sheets appear here, on page one, not only in the diagnostics appendix.
+function renderUnresolvedSection(section) {
+  const u = section.unresolved || {};
+  const gaps = u.gapCheckGaps || [];
+  const triage = u.unresolvedTriageCandidates || [];
+  const ordering = u.orderingMismatches || [];
+  const escalations = u.escalations || [];
+  let md = '';
+  if (!gaps.length && !triage.length && !ordering.length && !escalations.length) {
+    md += `None — all required conditions accounted for.\n\n`;
+    return md;
+  }
+  if (escalations.length) {
+    md += `### Escalated absences (required sheet type missing from the set entirely)\n\n`;
+    for (const e of escalations) {
+      const f = e.finding || {};
+      md += `- **[${f.brand || 'Unknown'}]** ${f.description || `Finding ${e.finding_id}`}\n`;
+      md += `  - *Missing sheet types:* ${(e.missing_sheet_types || []).join('; ') || '(unspecified)'}\n`;
+      if (e.rationale) md += `  - *Rationale:* ${e.rationale}\n`;
+      if (f.citation) md += `  - *Citation:* ${f.citation}\n`;
+    }
+    md += `\n`;
+  }
+  if (gaps.length) {
+    md += `### Sheets referenced but missing from this set\n\n_These sheets are cited by sheets in the set but were not extracted — scope living on them is invisible to this report._\n\n`;
+    for (const gap of gaps) {
+      md += `- **${gap.targetSheet}** — referenced by ${gap.referencedBy.map((r) => r.fromSheet).join(', ')}\n`;
+    }
+    md += `\n`;
+  }
+  if (triage.length) {
+    md += `### Unresolved triage candidates\n\n_Triage named these sheet numbers but they couldn't be mapped to a page:_ ${triage.join(', ')}\n\n`;
+  }
+  if (ordering.length) {
+    md += `### Ordering mismatches\n\n_Sheet numbering did not land where the index said it would — treat citations to these pages with caution._\n\n`;
+    for (const m of ordering) {
+      md += `- Page ${m.pageIndex}: expected "${m.expected}", got "${m.actual}"\n`;
+    }
+    md += `\n`;
+  }
+  return md;
+}
+
+function renderFindingsSection(section) {
+  let md = '';
+  if (!section.findings.length) {
+    md += `_No findings in this category._\n\n`;
+    return md;
+  }
+  for (const f of section.findings) md += renderFinding(f);
+  md += `\n`;
+  return md;
+}
+
+function renderSection(section) {
+  let md = `## ${section.title}\n\n`;
+  switch (section.key) {
+    case 'rfi_list':
+      return md + renderRfiSection(section);
+    case 'risk_register':
+      return md + renderRiskRegisterSection(section);
+    case 'unresolved':
+      return md + renderUnresolvedSection(section);
+    default:
+      return md + renderFindingsSection(section);
+  }
 }
 
 // report: the object returned by runProjectSynthesis() (or runPipelineFromPdf().report).
@@ -28,24 +162,11 @@ export function renderReportMarkdown(report, { projectName, generatedAt, diagnos
     md += `> **⚠ Data quality warning:** sheet number(s) ${report.duplicateSheetNumbers.join(', ')} appeared on more than one extracted page — a real extraction defect, not a routing issue. Findings and Cross-Brand Watch entries under these sheet numbers may combine two unrelated physical pages. Verify against the source print before relying on citations to these sheet numbers.\n\n`;
   }
 
+  // The bid qualification package: sections 1-6 in the work order's contractual order (then
+  // estimating flags / critical path, which are bid-time but unplaced by the work order's list).
+  // Cross-Brand Watch renders inside Risk Register now, not as its own section.
   for (const section of report.sections) {
-    md += `## ${section.title}\n\n`;
-    if (!section.findings.length) {
-      md += `_No findings in this category._\n\n`;
-      continue;
-    }
-    for (const f of section.findings) md += renderFinding(f);
-    md += `\n`;
-  }
-
-  if (report.crossBrandWatch.length) {
-    md += `## Cross-Brand Watch\n\n`;
-    md += `Sheets relevant to more than one brand — findings below are grouped by sheet so interactions between systems aren't buried in separate brand sections.\n\n`;
-    for (const c of report.crossBrandWatch) {
-      md += `### Sheet ${c.sheetNumber} (${c.brands.join(' + ')})\n\n`;
-      for (const f of c.findings) md += `- **[${f.brand}]** ${f.description}\n`;
-      md += `\n`;
-    }
+    md += renderSection(section);
   }
 
   md += `## Brand Appendix\n\n`;
@@ -64,7 +185,18 @@ export function renderReportMarkdown(report, { projectName, generatedAt, diagnos
     if (b.pdfPagesAttached?.length) {
       md += `- Drawing pages reviewed as PDF (graphics, not just text): ${b.pdfPagesAttached.join(', ')}\n`;
     }
-    md += `- ${b.findings.length} finding(s) — see sections above for full detail.\n\n`;
+    md += `- ${b.findings.length} finding(s) — full detail in the sections above; listed here with evidence types:\n`;
+    for (const f of b.findings) {
+      md += `  - [${f.finding_type || 'untyped'} / ${f.evidence_type || 'no evidence_type'}${f.sheet_reference ? ` / ${f.sheet_reference}` : ''}] ${f.description || ''}\n`;
+    }
+    md += `\n`;
+  }
+
+  // Install-phase appendix sections (preconstruction checklist, installation briefing) — kept out
+  // of the qualification package above.
+  for (const section of report.appendixSections || []) {
+    md += `## Appendix: ${section.title}\n\n`;
+    md += renderFindingsSection(section);
   }
 
   if (report.unclassifiedSheets.length) {

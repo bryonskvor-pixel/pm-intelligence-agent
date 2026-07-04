@@ -129,7 +129,15 @@ export async function runPipelineFromPdf(pdfBytes, { indexPageIndex = 0 } = {}) 
   const sheetInventory = candidateSheets
     .filter((s) => s.sheetNumber)
     .map((s) => ({ sheetNumber: s.sheetNumber, title: s.title ?? null, discipline: s.discipline ?? null }));
-  const report = await runProjectSynthesis(synthesisSheets, { triageCandidates, sheetInventory, gapCheck: { gaps } });
+  // Phase 4: unresolved triage candidates and surviving ordering mismatches feed the report's
+  // required Unresolved Items section, not just the diagnostics appendix.
+  const report = await runProjectSynthesis(synthesisSheets, {
+    triageCandidates,
+    sheetInventory,
+    gapCheck: { gaps },
+    unresolvedCandidates,
+    orderingMismatches,
+  });
 
   return {
     report,

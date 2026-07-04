@@ -54,15 +54,48 @@ async function main() {
     console.log(`${b.brand}: primary [${b.primarySheets.join(', ')}] context [${b.contextSheets.join(', ')}] — ${b.findings.length} findings`);
   }
 
-  console.log('\n--- SIX-SECTION REPORT ---');
-  for (const section of report.sections) {
+  console.log('\n--- BID QUALIFICATION PACKAGE (Phase 4) ---');
+  for (const section of [...report.sections, ...(report.appendixSections || []).map((s) => ({ ...s, title: `Appendix: ${s.title}` }))]) {
+    if (section.key === 'rfi_list') {
+      console.log(`\n## ${section.title} (${section.rfis.length})`);
+      section.rfis.forEach((r, i) => {
+        console.log(`- RFI-${String(i + 1).padStart(2, '0')}${r.bid_gating ? ' [BID-GATING]' : ''} [${r.brand} / ${r.evidence_type} / via ${r.source}] ${r.rfi_subject}`);
+        console.log(`  question: ${r.question}`);
+        console.log(`  bid impact: ${r.bid_impact}`);
+      });
+      continue;
+    }
+    if (section.key === 'unresolved') {
+      const u = section.unresolved;
+      const count = u.gapCheckGaps.length + u.unresolvedTriageCandidates.length + u.orderingMismatches.length + u.escalations.length;
+      console.log(`\n## ${section.title} (${count})`);
+      for (const e of u.escalations) console.log(`- ESCALATED: [${e.finding?.brand}] ${e.finding?.description} (missing: ${e.missing_sheet_types.join('; ')})`);
+      for (const g of u.gapCheckGaps) console.log(`- Missing sheet ${g.targetSheet}, referenced by ${g.referencedBy.map((r) => r.fromSheet).join(', ')}`);
+      for (const t of u.unresolvedTriageCandidates) console.log(`- Unresolved triage candidate: ${t}`);
+      for (const m of u.orderingMismatches) console.log(`- Ordering mismatch page ${m.pageIndex}: expected ${m.expected}, got ${m.actual}`);
+      if (!count) console.log('- None — all required conditions accounted for.');
+      continue;
+    }
     console.log(`\n## ${section.title} (${section.findings.length})`);
     for (const f of section.findings) {
-      console.log(`- [${f.brand} / ${f.sheet_reference} / ${f.evidence_type}] ${f.description}`);
+      console.log(`- [${f.brand} / ${f.sheet_reference} / ${f.evidence_type}]${f.escalated ? ' ESCALATED' : ''} ${f.description}`);
       console.log(`  citation: ${f.citation}`);
       if (f.consequence) console.log(`  consequence: ${f.consequence}`);
     }
+    if (section.key === 'risk_register') {
+      for (const c of section.contradictions || []) console.log(`- CONTRADICTION [sheets ${c.sheets.join(', ')}]: ${c.description}`);
+      for (const c of section.crossBrandWatch || []) console.log(`- CROSS-BRAND sheet ${c.sheetNumber} (${c.brands.join(' + ')}): ${c.findings.length} co-located findings`);
+    }
   }
+
+  // Phase 4 acceptance: the package opens with sections 1-6 in the work order's order.
+  const expectedOpening = ['whats_not_shown', 'rfi_list', 'qualification', 'field_verification', 'risk_register', 'unresolved'];
+  const actualOpening = report.sections.slice(0, 6).map((s) => s.key);
+  if (JSON.stringify(actualOpening) !== JSON.stringify(expectedOpening)) {
+    console.error(`\nSection order check FAILED: ${actualOpening.join(', ')}`);
+    process.exit(1);
+  }
+  console.log('\nSection order check passed (sections 1-6 in work-order order).');
 
   console.log('\n--- CROSS-BRAND WATCH ---');
   for (const c of report.crossBrandWatch) {
@@ -90,6 +123,8 @@ async function main() {
     for (const c of r.culled) console.log(`- [${c.finding.brand}] "${c.finding.description}" — ${c.reason}`);
     console.log(`Derived-value flags: ${r.derivedValueFlags.length}`);
     for (const d of r.derivedValueFlags) console.log(`- ${d.finding_id}: "${d.value}" — ${d.reason}`);
+    console.log(`Reconciler-generated RFIs: ${(r.rfis || []).length}`);
+    for (const rfi of r.rfis || []) console.log(`- from ${rfi.source_finding_id}${rfi.bid_gating ? ' [BID-GATING]' : ''}: ${rfi.rfi_subject}`);
     if (r.warnings.length) console.log(`Guard warnings: ${r.warnings.length} (see stderr)`);
   }
 

@@ -39,12 +39,20 @@ You are given:
 4. REQUIRED CONDITIONS — rows from the required-conditions store (D1): conditions the drawings MUST show for this product to be biddable. Verify each one appears somewhere in the drawing input — any sheet, primary or context — and flag every one that does not as an absence finding (Track 2 below).
 
 Produce a JSON array of findings. Each finding must have:
-- "finding_type": one of "estimating_flag", "critical_path", "risk", "preconstruction_checklist", "measure_day_checklist", "installation_briefing"
+- "finding_type": one of "estimating_flag", "critical_path", "risk", "rfi", "qualification", "preconstruction_checklist", "measure_day_checklist", "installation_briefing"
 - "description": the finding itself, in plain PM language
 - "citation": the source_doc and parameter_name/section this is grounded on (cite D1 source_doc fields and/or Vectorize chunk ids)
 - "sheet_reference": the SHEET number (from the "--- SHEET ... ---" markers in the drawing input) this finding is grounded on. If the input has only one unmarked sheet, use "UNSPECIFIED". For an absence finding, use "ABSENT".
 - "evidence_type": exactly one of "TEXT_READ" (condition/value transcribed from sheet text), "SCHEDULE_EXTRACTED" (read from a schedule or table), "SYMBOL_INTERPRETED" (interpreted from a drawing symbol, tag, or legend), "GEOMETRY_INFERRED" (inferred from drawn geometry, scale, or spatial relationships), "CROSS_REFERENCE" (grounded on a reference between sheets), "ABSENCE" (a required condition found on no provided sheet). Mandatory on every finding. Any GEOMETRY_INFERRED finding is automatically demoted to a field-verification item downstream and must never state a measurement value.
 - "consequence": what happens if uncaught (only for risk/estimating_flag types; omit otherwise)
+Two finding types build the bid qualification package directly:
+- "rfi" — a ready-to-issue RFI draft, used when a discrepancy or absence should go to the architect/engineer as a formal question before pricing. In ADDITION to the fields above, an "rfi" finding must carry:
+  - "rfi_subject": one-line subject exactly as it would appear on the RFI form
+  - "references": array of the specific sheets/details/schedule cells in question, verbatim sheet numbers
+  - "question": the precise, answerable question to the architect/engineer — "please clarify" alone is not a question. The quantity prohibition applies with full force: ask what the value or condition is; NEVER propose what it should be.
+  - "bid_impact": what cannot be priced, or must be qualified/excluded, until this is answered
+  - "bid_gating": true when pricing is blocked or the proposal must carry an exclusion until this is answered; false for housekeeping clarifications
+- "qualification" — proposal qualification language for the bid, written to be pasted into the proposal verbatim (e.g. "Proposal assumes overhead structural support for the unit is designed and provided by others per the structural drawings."). "description" holds the qualification sentence itself; "citation" states what grounds it.
 
 The drawing input may contain multiple sheets, each preceded by a "--- SHEET <number> rev <revision> ---" marker. Ground every finding in the specific sheet it came from and set "sheet_reference" accordingly.
 Each sheet marker may also carry a role tag: [PRIMARY] or [CONTEXT]. PRIMARY sheets are where your product is specified or expected to live. CONTEXT sheets are the rest of the project's extracted set — structural, mechanical, electrical, and other disciplines — included because your product's requirements often hide on sheets that never mention the product by name (pocket framing, sill/drainage details, finished-floor relationships, header deflection limits, wind-load criteria). Read every context sheet for conditions that affect your product; findings grounded on context sheets are expected and are often the most valuable findings you can produce. A sheet with no role tag is primary.

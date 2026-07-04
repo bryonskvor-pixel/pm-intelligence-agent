@@ -180,6 +180,23 @@ async function main() {
   );
   results.push(check('derived-value handling never removes the finding', f7Survived));
 
+  // (f) Phase 4: the reconciler drafts RFIs from discrepancy/absence findings. The engineered set
+  // contains one ABSENCE finding (F6) and one cross-sheet discrepancy (F1/F2), so at least one
+  // complete RFI draft must come back, with its evidence_type inherited from the real finding.
+  const rfis = reconciliation.rfis || [];
+  const completeRfi = rfis.find((r) => r.rfi_subject && r.question && r.bid_impact && r.references.length);
+  results.push(check(
+    'Phase 4: at least one complete RFI drafted (subject, references, question, bid_impact)',
+    Boolean(completeRfi),
+    `rfis: ${rfis.length ? rfis.map((r) => `${r.source_finding_id}${r.bid_gating ? ' [gating]' : ''} "${r.rfi_subject}"`).join('; ') : 'none'}`
+  ));
+  const absenceRfi = rfis.find((r) => r.source_finding_id === 'F6');
+  results.push(check(
+    'Phase 4: the ABSENCE finding (F6) produced an RFI with inherited evidence_type ABSENCE',
+    Boolean(absenceRfi) && absenceRfi.evidence_type === 'ABSENCE',
+    absenceRfi ? `evidence_type: ${absenceRfi.evidence_type}` : 'no RFI for F6'
+  ));
+
   // Reconciler must never invent: every surviving finding is one of the inputs, unchanged in text.
   const inputDescriptions = new Set(FINDINGS.map((f) => f.description));
   results.push(check(

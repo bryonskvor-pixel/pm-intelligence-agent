@@ -24,6 +24,10 @@
 // 5. Derived-value flags — residual quantity-prohibition leakage (computed percentages, unit
 //    conversions, arithmetic the model did) that survived the specialist prompts. Annotation
 //    only: the finding stays, flagged for review, never rewritten.
+// 6. RFI generation (Phase 4) — every discrepancy/absence finding becomes a ready-to-issue RFI
+//    draft (rfi_subject / references / question / bid_impact / bid_gating) unless the specialist
+//    already drafted one (finding_type "rfi"). Each RFI's source finding id is validated and its
+//    evidence_type is inherited from the real finding, never trusted from the model.
 
 import Anthropic from '@anthropic-ai/sdk';
 import { callAndParseJson } from '../lib/callAndParseJson.js';
@@ -37,7 +41,7 @@ You are given:
 4. MULTI-PRODUCT SHEETS — sheets where two or more brands' products co-locate.
 5. REQUIRED CONDITIONS — the required-conditions rows (with where_expected sheet types) the specialists verified, brand-tagged.
 
-You have exactly five jobs:
+You have exactly six jobs:
 
 1. CONTRADICTIONS: identify findings whose cited contents conflict — across brands, across sheets, or same-brand across sheets (e.g. a schedule and a plan disagreeing, two sheets stating different criteria for the same element). Each entry cites the conflicting finding ids and every sheet involved. Quote the conflicting values exactly as the findings state them; never compute the difference between them.
 
@@ -49,13 +53,22 @@ You have exactly five jobs:
 
 5. DERIVED-VALUE FLAGS: flag any finding whose text contains a value the specialist computed rather than quoted — computed percentage differences, unit conversions, arithmetic illustrations, computed areas. Values quoted verbatim from a sheet or the parameter store are fine. Flagging does not remove the finding; it marks it for review.
 
+6. RFI GENERATION: for every finding that states a discrepancy (conflicting values across sheets, or a drawn value conflicting with the parameter store — including every contradiction you identified in job 1) or an absence (evidence_type "ABSENCE"), draft a ready-to-issue RFI. Skip a finding only if it already has finding_type "rfi" (the specialist drafted the RFI itself) or an RFI you already drafted asks the same question. When you have merged findings in job 2, draft the RFI against the keep_id finding, not a merged-away one. Each RFI carries:
+   - "source_finding_id": the finding it comes from.
+   - "rfi_subject": a one-line subject as it would appear on the RFI form.
+   - "references": the specific sheets/details/schedule cells in question, verbatim sheet numbers, as an array.
+   - "question": the precise question to the architect/engineer. It must be answerable — "please clarify" alone is not a question. The quantity prohibition applies with full force: the RFI asks what the value or condition is, it NEVER proposes what it should be.
+   - "bid_impact": what cannot be priced, or must be qualified/excluded, until this is answered.
+   - "bid_gating": true when pricing is blocked or the proposal must carry an exclusion until this is answered; false for housekeeping clarifications.
+
 Output a single JSON object, exactly this shape:
 {
   "contradictions": [{ "finding_ids": ["F1", "F2"], "sheets": ["A-405", "S-201"], "description": "...", "citation": "..." }],
   "corroborations": [{ "keep_id": "F3", "merged_ids": ["F4"], "note": "..." }],
   "escalations": [{ "finding_id": "F6", "missing_sheet_types": ["electrical (E) sheets"], "rationale": "..." }],
   "culls": [{ "finding_id": "F5", "reason": "..." }],
-  "derived_value_flags": [{ "finding_id": "F7", "value": "...", "reason": "..." }]
+  "derived_value_flags": [{ "finding_id": "F7", "value": "...", "reason": "..." }],
+  "rfis": [{ "source_finding_id": "F6", "rfi_subject": "...", "references": ["S-201"], "question": "...", "bid_impact": "...", "bid_gating": true }]
 }
 Every array may be empty. Every finding_id you output MUST be an id present in FINDINGS — ids you invent are discarded. Cite sheets by their sheet numbers exactly as given.
 The quantity prohibition applies to your own output: never state a quantity, dimension, or computed value in your descriptions, notes, or rationales — quote the findings' own wording instead.
@@ -168,8 +181,38 @@ function applyReconciliation(findings, raw) {
     derivedValueFlags.push({ finding_id: id, value: entry.value || '', reason: entry.reason || '' });
   }
 
+  // RFI drafts (Phase 4). The source finding id is validated like every other reference; the
+  // RFI's brand and evidence_type come from the real finding, never from the model. RFIs against
+  // culled findings are dropped (a filler finding's RFI is filler too); RFIs against merged-away
+  // findings are dropped with a warning since the prompt directs them at the keep_id finding.
+  const rfis = [];
+  for (const entry of asArray(raw.rfis)) {
+    const [id] = validIds([entry.source_finding_id], 'RFI');
+    if (!id) continue;
+    if (removed.has(id)) {
+      warnings.push({ type: 'rfi_source_removed', detail: `RFI drafted against ${id}, which was merged/culled — dropped; RFIs must target surviving findings.` });
+      continue;
+    }
+    const f = byId.get(id);
+    if (f.finding_type === 'rfi') {
+      warnings.push({ type: 'rfi_duplicate', detail: `RFI drafted against ${id}, which is already a specialist-drafted RFI finding — dropped as a duplicate.` });
+      continue;
+    }
+    rfis.push({
+      source_finding_id: id,
+      brand: f.brand,
+      rfi_subject: entry.rfi_subject || '',
+      references: asArray(entry.references).map(String),
+      question: entry.question || '',
+      bid_impact: entry.bid_impact || '',
+      bid_gating: entry.bid_gating === true,
+      evidence_type: f.evidence_type,
+      source_citation: f.citation,
+    });
+  }
+
   const adjusted = findings.filter((f) => !removed.has(f.id));
-  return { adjusted, reconciliation: { contradictions, corroborations, escalations, culled, derivedValueFlags, warnings } };
+  return { adjusted, reconciliation: { contradictions, corroborations, escalations, culled, derivedValueFlags, rfis, warnings } };
 }
 
 // findings: deduped, brand-tagged specialist findings (post dedupeFindings — this call catches
@@ -191,7 +234,7 @@ export async function reconcileFindings({ findings, sheetInventory = [], gapChec
   if (!identified.length) {
     return {
       findings: identified,
-      reconciliation: { contradictions: [], corroborations: [], escalations: [], culled: [], derivedValueFlags: [], warnings: [] },
+      reconciliation: { contradictions: [], corroborations: [], escalations: [], culled: [], derivedValueFlags: [], rfis: [], warnings: [] },
       usage: null,
     };
   }
