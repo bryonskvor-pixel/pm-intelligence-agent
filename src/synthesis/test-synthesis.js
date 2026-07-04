@@ -28,6 +28,12 @@ Louver L-3: Airolite AC153, opening 96 in. wide x 60 in. tall, single section sh
 Smoke Guard M2100 vertical deployable curtain, header clearance 6 in., FACP loop referenced as "by others" with no auxiliary contact shown on E-series drawings.`,
   },
   {
+    sheetNumber: 'S-201',
+    revision: '0',
+    text: `Structural framing plan, Level 2 ballroom, gridline D-4 to D-9.
+W8x10 continuous beam spanning 24'-0", designed for uniform live load only; no concentrated point-load allowance noted at the operable wall location. Deflection criteria: L/240. No proprietary products named on this sheet.`,
+  },
+  {
     sheetNumber: 'G-001',
     revision: '0',
     text: `General notes and sheet index. No product-specific information on this sheet.`,
@@ -44,7 +50,7 @@ async function main() {
 
   console.log('\n--- BRAND APPENDIX ---');
   for (const b of report.brandAppendix) {
-    console.log(`${b.brand}: ${b.sheetsUsed.join(', ')} — ${b.findings.length} findings`);
+    console.log(`${b.brand}: primary [${b.primarySheets.join(', ')}] context [${b.contextSheets.join(', ')}] — ${b.findings.length} findings`);
   }
 
   console.log('\n--- SIX-SECTION REPORT ---');

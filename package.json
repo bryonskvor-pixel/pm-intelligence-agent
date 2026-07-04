@@ -9,6 +9,7 @@
     "test:smoke-guard": "node src/specialists/test-smoke-guard.js",
     "test:airolite": "node src/specialists/test-airolite.js",
     "test:euro-wall": "node src/specialists/test-euro-wall.js",
+    "test:routing": "node src/synthesis/test-routing.js",
     "test:synthesis": "node src/synthesis/test-synthesis.js",
     "test:extraction": "node src/lib/test-extraction.js",
     "test:triage": "node src/lib/test-triage.js",

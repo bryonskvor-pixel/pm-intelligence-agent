@@ -35,19 +35,25 @@ Produce a JSON array of findings. Each finding must have:
 - "consequence": what happens if uncaught (only for risk/estimating_flag types; omit otherwise)
 
 The drawing input may contain multiple sheets, each preceded by a "--- SHEET <number> rev <revision> ---" marker. Ground every finding in the specific sheet it came from and set "sheet_reference" accordingly.
+Each sheet marker may also carry a role tag: [PRIMARY] or [CONTEXT]. PRIMARY sheets are where your product is specified or expected to live. CONTEXT sheets are the rest of the project's extracted set — structural, mechanical, electrical, fire alarm, and other disciplines — included because your product's requirements often hide on sheets that never mention the product by name (overhead support steel, deflection criteria, plenum obstructions, 3-phase power circuits). Read every context sheet for conditions that affect your product; findings grounded on context sheets are expected and are often the most valuable findings you can produce. A sheet with no role tag is primary.
 If the input doesn't contain enough information to ground a finding in evidence, do not invent one — return fewer findings rather than speculate.
 Output must be valid JSON: when writing inch measurements inside string values, always write "in." instead of the " symbol, since an unescaped " inside a JSON string breaks parsing.
 Respond with ONLY the JSON array, no prose, no markdown code fences.`;
 
-// Raw model matches only (no SKYFOLD-GENERAL fallback) — used by the router to decide brand relevance.
+// Raw matches only (no unconditional SKYFOLD-GENERAL fallback) — used by the router to decide
+// brand relevance. A sheet that says "Skyfold" with no model series at all still signals the
+// brand (e.g. "operable wall: Skyfold, see spec") — that case returns SKYFOLD-GENERAL so
+// brand-name-only sheets route correctly instead of being invisible to the router.
 export function detectModelIds(text) {
   const upper = text.toUpperCase();
-  return KNOWN_MODEL_IDS.filter((id) => id !== 'SKYFOLD-GENERAL' && upper.includes(id.replace('SKYFOLD-', '')));
+  const ids = KNOWN_MODEL_IDS.filter((id) => id !== 'SKYFOLD-GENERAL' && upper.includes(id.replace('SKYFOLD-', '')));
+  if (!ids.length && upper.includes('SKYFOLD')) ids.push('SKYFOLD-GENERAL');
+  return ids;
 }
 
 // Expanded for D1 lookup: always includes SKYFOLD-GENERAL since brand-wide rows apply regardless of model match.
 function expandForD1(matchedIds) {
-  return matchedIds.length ? [...matchedIds, 'SKYFOLD-GENERAL'] : ['SKYFOLD-GENERAL'];
+  return [...new Set([...matchedIds, 'SKYFOLD-GENERAL'])];
 }
 
 export async function runSkyfoldSpecialist(sheetsInput) {

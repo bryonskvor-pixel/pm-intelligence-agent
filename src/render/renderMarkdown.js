@@ -54,7 +54,12 @@ export function renderReportMarkdown(report, { projectName, generatedAt, diagnos
   }
   for (const b of report.brandAppendix) {
     md += `### ${b.brand}\n\n`;
-    md += `- Sheets used: ${b.sheetsUsed.join(', ') || '(none)'}\n`;
+    if (b.primarySheets || b.contextSheets) {
+      md += `- Primary sheets (product specified or triage-flagged): ${(b.primarySheets || []).join(', ') || '(none)'}\n`;
+      md += `- Context sheets (rest of the set, reviewed for hidden requirements): ${(b.contextSheets || []).join(', ') || '(none)'}\n`;
+    } else {
+      md += `- Sheets used: ${b.sheetsUsed.join(', ') || '(none)'}\n`;
+    }
     md += `- Models detected: ${(b.modelIdsDetected || []).join(', ') || '(none)'}\n`;
     if (b.pdfPagesAttached?.length) {
       md += `- Drawing pages reviewed as PDF (graphics, not just text): ${b.pdfPagesAttached.join(', ')}\n`;
@@ -64,7 +69,7 @@ export function renderReportMarkdown(report, { projectName, generatedAt, diagnos
 
   if (report.unclassifiedSheets.length) {
     md += `## Unclassified Sheets\n\n`;
-    md += `Not reviewed by any specialist — no match to any of the 5 brands: ${report.unclassifiedSheets.join(', ')}\n\n`;
+    md += `Primary for none of the 5 brands (no keyword or triage match). Still provided to every firing specialist as context — listed here for awareness, not dropped: ${report.unclassifiedSheets.join(', ')}\n\n`;
   }
 
   if (diagnostics) {

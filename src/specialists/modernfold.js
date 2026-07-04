@@ -32,12 +32,20 @@ Produce a JSON array of findings. Each finding must have:
 - "consequence": what happens if uncaught (only for risk/estimating_flag types; omit otherwise)
 
 The drawing input may contain multiple sheets, each preceded by a "--- SHEET <number> rev <revision> ---" marker. Ground every finding in the specific sheet it came from and set "sheet_reference" accordingly.
+Each sheet marker may also carry a role tag: [PRIMARY] or [CONTEXT]. PRIMARY sheets are where your product is specified or expected to live. CONTEXT sheets are the rest of the project's extracted set — structural, mechanical, electrical, fire alarm, and other disciplines — included because your product's requirements often hide on sheets that never mention the product by name (track support structure, floor flatness notes, electrical devices near the stacking footprint). Read every context sheet for conditions that affect your product; findings grounded on context sheets are expected and are often the most valuable findings you can produce. A sheet with no role tag is primary.
 If the input doesn't contain enough information to ground a finding in evidence, do not invent one — return fewer findings rather than speculate.
 Output must be valid JSON: when writing inch measurements inside string values, always write "in." instead of the " symbol, since an unescaped " inside a JSON string breaks parsing.
 Respond with ONLY the JSON array, no prose, no markdown code fences.`;
 
 export function detectModelIds(text) {
-  return KNOWN_MODEL_IDS.filter((id) => text.toUpperCase().includes(id));
+  const upper = text.toUpperCase();
+  return KNOWN_MODEL_IDS.filter((id) => {
+    // Bare "931" as a plain substring false-positives on detail numbers, room numbers, dates,
+    // and spec section numbers ("09310"). Require a word-boundary match AND the brand name
+    // somewhere in the input — a word boundary alone still passes room/detail numbers.
+    if (id === '931') return /\b931\b/.test(upper) && upper.includes('MODERNFOLD');
+    return upper.includes(id);
+  });
 }
 
 export async function runModernfoldSpecialist(sheetsInput) {

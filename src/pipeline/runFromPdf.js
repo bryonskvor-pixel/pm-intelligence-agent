@@ -32,9 +32,11 @@ const BRAND_NAMES = ['Modernfold', 'Skyfold', 'Euro-Wall', 'Airolite', 'Smoke Gu
 // 6. Gap-check the extracted candidate set against itself — anything it references but doesn't
 //    include is surfaced, not silently dropped, whether that's triage under-covering or a real
 //    document defect (as it was for the A-101/A-102 duplicate found earlier this session).
-// 7. Hand the candidate sheets to the already-validated routing/synthesis pipeline — brand
-//    routing there uses actual extracted content (keyword/model detection), not triage's
-//    candidate list, so any triage imprecision never leaks into the final routing decision.
+// 7. Hand the candidate sheets to the routing/synthesis pipeline ALONG WITH triage's per-brand
+//    candidate lists — routing ORs both signals (keyword/model detection on extracted content,
+//    and triage's judgment that e.g. a structural sheet matters to Skyfold even though it never
+//    names the brand) to decide which specialists fire; every firing specialist then receives
+//    the full extracted set, role-tagged primary vs. context.
 export async function runPipelineFromPdf(pdfBytes, { indexPageIndex = 0 } = {}) {
   const { sheets: indexSheets, usage: indexUsage } = await extractSheetsFromPdf(pdfBytes, {
     pageIndices: [indexPageIndex],
@@ -113,7 +115,14 @@ export async function runPipelineFromPdf(pdfBytes, { indexPageIndex = 0 } = {}) 
       text: s.rawText,
       pageBytes: s.pageIndex != null ? pageBytesByIndex[s.pageIndex] : undefined,
     }));
-  const report = await runProjectSynthesis(synthesisSheets);
+
+  // Triage's judgment must survive into routing (it's signal (b) for which specialists fire) —
+  // not just decide which pages got extracted.
+  const triageCandidates = {};
+  for (const brand of BRAND_NAMES) {
+    triageCandidates[brand] = triageResult[brand]?.candidateSheetNumbers || [];
+  }
+  const report = await runProjectSynthesis(synthesisSheets, { triageCandidates });
 
   return {
     report,

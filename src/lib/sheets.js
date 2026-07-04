@@ -11,7 +11,12 @@ function sheetHeader(s) {
   // s.revision ? ... would treat a legitimate Revision 0 (a real, initial/unrevised sheet — the
   // extraction schema explicitly allows revision as a number) as if no revision were present at
   // all, since 0 is falsy in JS. Explicit null/undefined check instead.
-  return `--- SHEET ${s.sheetNumber}${s.revision != null ? ` rev ${s.revision}` : ''} ---`;
+  // role ("primary" | "context", set by routeSheets) renders into the marker so the specialist
+  // can tell where its product lives vs. what's supporting-discipline context. Sheets without a
+  // role (plain-string input, direct specialist calls) render no tag — specialists treat
+  // untagged sheets as primary.
+  const roleTag = s.role ? ` [${String(s.role).toUpperCase()}]` : '';
+  return `--- SHEET ${s.sheetNumber}${s.revision != null ? ` rev ${s.revision}` : ''}${roleTag} ---`;
 }
 
 export function formatSheetsBlock(sheets) {
@@ -31,17 +36,33 @@ export function formatSheetsBlock(sheets) {
 // blow the per-request size limit. Sheets past the budget fall back to text-only and are
 // reported in `omittedPdfSheets` — degraded visibly, never silently.
 export function buildDrawingInputBlocks(sheets, { maxAttachedBytes = 20 * 1024 * 1024 } = {}) {
-  const blocks = [];
+  // Attachment budget is allocated primary-first: context sheets degrade to text-only before a
+  // primary sheet ever does. Decided in a first pass over sheets sorted by role (stable sort, so
+  // original order is preserved within each role tier; untagged sheets count as primary); blocks
+  // are still emitted in the original sheet order below.
+  const attachBudgetOrder = [...sheets].sort(
+    (a, b) => (a.role === 'context' ? 1 : 0) - (b.role === 'context' ? 1 : 0)
+  );
+  const attachSet = new Set();
   const omittedPdfSheets = [];
-  const attachedPdfSheets = [];
   let attachedBytes = 0;
+  for (const s of attachBudgetOrder) {
+    if (!s.pageBytes) continue;
+    if (attachedBytes + s.pageBytes.length <= maxAttachedBytes) {
+      attachedBytes += s.pageBytes.length;
+      attachSet.add(s);
+    } else {
+      omittedPdfSheets.push(s.sheetNumber);
+    }
+  }
+
+  const blocks = [];
+  const attachedPdfSheets = [];
 
   for (const s of sheets) {
-    const canAttach = s.pageBytes && attachedBytes + s.pageBytes.length <= maxAttachedBytes;
-    if (s.pageBytes && !canAttach) omittedPdfSheets.push(s.sheetNumber);
+    const canAttach = attachSet.has(s);
 
     if (canAttach) {
-      attachedBytes += s.pageBytes.length;
       attachedPdfSheets.push(s.sheetNumber);
       blocks.push({
         type: 'text',

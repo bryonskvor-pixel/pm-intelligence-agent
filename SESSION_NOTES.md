@@ -232,3 +232,26 @@ Confirmed direction (extends, doesn't replace, today's routing/correlation work)
 3. Persistence (`pm-intel-knowledge` tables) and Vercel/auth/frontend — still not started.
 
 **Reminder:** commit and push this session's fixes — `git add -A` (review the diff first, this repo has a client-source-PDF gitignore rule to respect) `&& git commit -m "Fix 10 code-review findings in print-reading pipeline" && git push`.
+
+## 2026-07-04 — Remediation Work Order Phase 1: specialists read the full set
+
+**Accomplished this session:** Executed Phase 1 (and only Phase 1) of `Docs/Remediation_Work_Order_Bid_Qualification_Lens.md` (pulled fresh from GitHub at session start). The architectural fix: routing now decides **which specialists fire**, not which sheets each specialist sees — a firing specialist receives ALL extracted sheets, role-tagged `primary` (keyword match or triage candidate for that brand) vs. `context` (everything else). Previously a structural sheet that never said "ZENITH" landed in `unclassified` and no specialist ever read it.
+
+**Changes, per the work order's 6 items:**
+1. `routeSheets()` (src/synthesis/report.js) rewritten: brand fires on keyword-match OR triage candidacy (both signals OR'd, matched via `normalizeSheetNumber`); new optional `triageCandidates` param on `routeSheets`/`runProjectSynthesis`. "Unclassified" now means "primary for no brand" — those sheets still go to every firing specialist as context.
+2. `src/lib/sheets.js`: sheet header markers render the role (`--- SHEET S-201 rev 0 [CONTEXT] ---`); untagged sheets (plain-string input, direct specialist calls) render no tag and are treated as primary — all existing callers work unchanged.
+3. All 5 specialist system prompts: new paragraph explaining [PRIMARY]/[CONTEXT], with brand-specific examples of where requirements hide, and explicit "findings grounded on context sheets are expected and often the most valuable."
+4. `buildDrawingInputBlocks`: PDF attachment budget now allocated primary-first (stable-sorted first pass decides attachments; blocks still emitted in original sheet order) — context sheets degrade to text-only before primary sheets ever do.
+5. Detection fragility: Skyfold detector now returns `SKYFOLD-GENERAL` when the bare brand name appears with no model series (previously invisible to the router); Modernfold's bare `'931'` now requires a word-boundary match AND "MODERNFOLD" in the input (word boundary alone still passes room/detail numbers). Skyfold's `expandForD1` deduped accordingly.
+6. `runFromPdf.js` passes triage's per-brand candidate lists into `runProjectSynthesis` — triage's judgment survives into routing instead of being discarded after page selection.
+- `renderMarkdown.js`: brand appendix now shows primary vs. context sheets (falls back to old `sheetsUsed` line for pre-Phase-1-shaped reports); "Unclassified Sheets" wording corrected (context-reviewed, not dropped).
+
+**Acceptance checks (all run before committing):**
+- New `npm run test:routing` (src/synthesis/test-routing.js) — 9 deterministic, zero-API-cost assertions, including the work order's named acceptance case: one Skyfold-keyword sheet + one no-keyword structural sheet both delivered to the Skyfold specialist, structural tagged context. All 9 pass.
+- `npm run test:render` — passes, back-compat fallback confirmed.
+- Live `npm run test:synthesis` (6 sheets, now including no-keyword structural sheet S-201): Skyfold fired with primary [A-405, A-406] + context [A-601, A-210, S-201, G-001] and produced its **top estimating flag grounded on S-201** (L/240 deflection criteria vs. Skyfold's 0.5 in. limit, no point-load allowance noted) — exactly the finding class Phase 1 exists to make possible. Smoke Guard also used context: caught the M2100 housing (6.25 in.) vs. drawn 6 in. header clearance conflict.
+- Note: `test:*` scripts need env loaded explicitly — `node --env-file=.env.local --env-file=.cloudflare.env <script>` (plain `npm run test:synthesis` fails on missing CLOUDFLARE_* vars).
+
+**Observed, deliberately NOT fixed (Phase 2 scope, per the work order's "do not start Phase 2" rule):** the live Skyfold finding computes "L/240 at 24'-0 in. span = 1.2 in." — a specialist-computed dimension, which Phase 2's quantity prohibition (2d) will eliminate. Recorded here so Phase 2 has a concrete live example to test against.
+
+**Next steps:** Phase 2 of the work order (required-conditions D1 table, two-track findings, evidence typing, quantity prohibition) — next session, only after this phase's commit.

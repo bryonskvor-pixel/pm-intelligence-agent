@@ -44,6 +44,7 @@ Produce a JSON array of findings. Each finding must have:
 - "consequence": what happens if uncaught (only for risk/estimating_flag types; omit otherwise)
 
 The drawing input may contain multiple sheets, each preceded by a "--- SHEET <number> rev <revision> ---" marker. Ground every finding in the specific sheet it came from and set "sheet_reference" accordingly.
+Each sheet marker may also carry a role tag: [PRIMARY] or [CONTEXT]. PRIMARY sheets are where your product is specified or expected to live. CONTEXT sheets are the rest of the project's extracted set — structural, mechanical, electrical, and other disciplines — included because your product's requirements often hide on sheets that never mention the product by name (pocket framing, sill/drainage details, finished-floor relationships, header deflection limits, wind-load criteria). Read every context sheet for conditions that affect your product; findings grounded on context sheets are expected and are often the most valuable findings you can produce. A sheet with no role tag is primary.
 If the input doesn't contain enough information to ground a finding in evidence, do not invent one — return fewer findings rather than speculate.
 Output must be valid JSON: when writing inch measurements inside string values, always write "in." instead of the " symbol, since an unescaped " inside a JSON string breaks parsing.
 Respond with ONLY the JSON array, no prose, no markdown code fences.`;
