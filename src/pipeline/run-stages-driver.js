@@ -25,9 +25,7 @@ import {
   createRun,
   planStage,
   confirmStage,
-  extractStage,
-  specialistStage,
-  finalizeStage,
+  advanceRun,
 } from './stages.js';
 
 const KNOWLEDGE_DB_ID = '305c2b6e-3c25-4ac1-b9f6-39ad23422c8d';
@@ -67,55 +65,38 @@ async function printStatus(runId) {
   return run;
 }
 
-// One stage call, chosen from persisted status alone — exactly what the web API's "advance"
-// route will do. Returns false when there is nothing left to advance. pdfBytes is re-resolved
-// by the caller before every call (see loadPdfBytes) — never cached across steps.
+// One stage call via the shared advanceRun (the same function the web API's step route calls),
+// narrated for the CLI. Returns advanceRun's `more` flag: true while the run can keep advancing
+// automatically, false when it stops (gate, awaiting confirmation, or complete). pdfBytes is
+// re-resolved by the caller before every call (see loadPdfBytes) — never cached across steps.
 async function step(runId, pdfBytes) {
-  const run = await store.getRun(runId);
-  if (!run) throw new Error(`No run ${runId}`);
-  switch (run.status) {
-    case 'created':
-    case 'planning': {
-      console.log('[step] planStage (index extraction + triage)...');
-      await planStage(store, runId, pdfBytes);
-      console.log('[step] manifest ready — review with "status", then "confirm".');
-      return false; // stops at the gate on purpose
-    }
+  const { phase, detail, more } = await advanceRun(store, runId, pdfBytes);
+  switch (phase) {
+    case 'plan':
+      console.log('[step] planStage done — review with "status", then "confirm".');
+      break;
     case 'awaiting_confirmation':
       console.log('[step] waiting on PM confirmation — run the "confirm" command.');
-      return false;
-    case 'confirmed':
-    case 'extracting': {
-      console.log('[step] extractStage (one chunk)...');
-      const res = await extractStage(store, runId, pdfBytes);
+      break;
+    case 'extract':
       console.log(
-        res.done
-          ? `[step] extraction complete — specialists seeded: ${res.firingBrands.join(', ')}`
-          : `[step] extracted pages ${res.extractedPages.join(', ')} — ${res.remainingPages} page(s) remaining`
+        detail.done
+          ? `[step] extraction complete — specialists seeded: ${detail.firingBrands.join(', ')}`
+          : `[step] extracted pages ${detail.extractedPages.join(', ')} — ${detail.remainingPages} page(s) remaining`
       );
-      return true;
-    }
-    case 'synthesizing': {
-      const pending = (await store.listSpecialists(runId)).filter((s) => s.status !== 'done');
-      if (pending.length) {
-        const brand = pending[0].brand;
-        console.log(`[step] specialistStage: ${brand} (${pending.length} pending)...`);
-        await specialistStage(store, runId, brand, pdfBytes);
-        console.log(`[step] ${brand} done.`);
-      } else {
-        console.log('[step] finalizeStage (reconciler + sectioning + render)...');
-        const result = await finalizeStage(store, runId);
-        fs.writeFileSync('pipeline_report.md', result.reportMarkdown);
-        console.log('[step] run complete — report written to pipeline_report.md');
-      }
-      return true;
-    }
+      break;
+    case 'specialist':
+      console.log(`[step] specialist ${detail.brand} done (${detail.pending} were pending).`);
+      break;
+    case 'finalize':
+      fs.writeFileSync('pipeline_report.md', detail.reportMarkdown);
+      console.log('[step] run complete — report written to pipeline_report.md');
+      break;
     case 'complete':
       console.log('[step] run already complete.');
-      return false;
-    default:
-      throw new Error(`Unhandled status "${run.status}"`);
+      break;
   }
+  return more;
 }
 
 async function main() {

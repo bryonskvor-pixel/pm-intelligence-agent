@@ -286,3 +286,48 @@ export async function finalizeStage(store, runId, { reconcileFn = undefined, pro
     throw err;
   }
 }
+
+// Advance a run by exactly one stage call, chosen from its persisted status alone — the single
+// source of truth for "what runs next" shared by the CLI driver and the web API's step route.
+// Returns { phase, status, more, detail }: `more` is true when the run can be advanced again
+// automatically (no human input needed), false when it stops — at the confirmation gate, when
+// awaiting confirmation, or once complete. Never logs; callers narrate. pdfBytes is re-supplied
+// by the caller each call (fetched fresh from disk or R2), never cached across invocations.
+export async function advanceRun(store, runId, pdfBytes, opts = {}) {
+  const run = await store.getRun(runId);
+  if (!run) throw new Error(`advanceRun: run not found: ${runId}`);
+  switch (run.status) {
+    case 'created':
+    case 'planning': {
+      await planStage(store, runId, pdfBytes, opts);
+      return { phase: 'plan', status: 'awaiting_confirmation', more: false, detail: {} };
+    }
+    case 'awaiting_confirmation':
+      // Stops here on purpose: the PM confirmation gate needs the confirm stage, not a step.
+      return { phase: 'awaiting_confirmation', status: 'awaiting_confirmation', more: false, detail: {} };
+    case 'confirmed':
+    case 'extracting': {
+      const res = await extractStage(store, runId, pdfBytes, opts);
+      return {
+        phase: 'extract',
+        status: res.done ? 'synthesizing' : 'extracting',
+        more: true,
+        detail: res,
+      };
+    }
+    case 'synthesizing': {
+      const pending = (await store.listSpecialists(runId)).filter((s) => s.status !== 'done');
+      if (pending.length) {
+        const brand = pending[0].brand;
+        await specialistStage(store, runId, brand, pdfBytes, opts);
+        return { phase: 'specialist', status: 'synthesizing', more: true, detail: { brand, pending: pending.length } };
+      }
+      const result = await finalizeStage(store, runId, opts);
+      return { phase: 'finalize', status: 'complete', more: false, detail: { reportMarkdown: result.reportMarkdown } };
+    }
+    case 'complete':
+      return { phase: 'complete', status: 'complete', more: false, detail: {} };
+    default:
+      throw new Error(`advanceRun: unhandled status "${run.status}" for run ${runId}`);
+  }
+}

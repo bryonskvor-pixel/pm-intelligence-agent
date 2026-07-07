@@ -28,6 +28,42 @@ Output must be valid JSON: an array of exactly one object per page given, in the
 
 class TruncatedBatchError extends Error {}
 
+// The model provider's output content-filtering policy can reject a specific page's extraction
+// with a 400 (a BadRequestError whose message carries "content filtering policy"). It is
+// deterministic per page — retrying the same page produces the same block — so it is recovered
+// the same way truncation is: bisect the batch to isolate the offending page, then, for that one
+// page, record a stub with a loud warning and move on rather than failing the whole run. The page
+// is skipped, not silently dropped — the warning surfaces downstream (Unresolved Items/diagnostics).
+function isContentFilterBlock(err) {
+  return !!err && !(err instanceof TruncatedBatchError) && /content filtering policy/i.test(err.message || '');
+}
+
+function contentFilterStub(pageIndex) {
+  return {
+    pageIndex,
+    sheetNumber: null,
+    revision: null,
+    date: null,
+    discipline: 'other',
+    title: null,
+    schedules: [],
+    dimensions: [],
+    keynotes: [],
+    tags: [],
+    gridlines: [],
+    crossReferences: [],
+    rawText: null,
+    notes: "Extraction output for this page was rejected by the model provider's content-filtering policy.",
+    extractionWarnings: [
+      {
+        type: 'content_filter_blocked',
+        detail:
+          "The extraction call for this page was rejected by the model provider's output content-filtering policy (HTTP 400). The page was skipped and its content is NOT in the record — review the source page manually.",
+      },
+    ],
+  };
+}
+
 // Accumulates real API usage across every call in a run (including retries and recursive
 // splits), so cost is a reported fact instead of an inference from the log.
 export function createUsageTracker() {
@@ -196,18 +232,29 @@ async function extractBatchWithRecovery(anthropic, pageBatch, usageTracker, maxT
       maxTokens,
     });
   } catch (err) {
-    if (!(err instanceof TruncatedBatchError)) throw err;
+    const truncated = err instanceof TruncatedBatchError;
+    const contentFiltered = isContentFilterBlock(err);
+    if (!truncated && !contentFiltered) throw err;
 
+    // Both failure modes isolate the same way: split the batch so the one bad page is separated
+    // from the good ones, which extract normally.
     if (pageBatch.length > 1) {
       const mid = Math.ceil(pageBatch.length / 2);
       const firstHalf = pageBatch.slice(0, mid);
       const secondHalf = pageBatch.slice(mid);
-      console.error(`Batch [${label}] truncated at ${pageBatch.length} pages — splitting into ${firstHalf.length} + ${secondHalf.length}.`);
+      const reason = truncated ? `truncated at ${pageBatch.length} pages` : 'blocked by content filter';
+      console.error(`Batch [${label}] ${reason} — splitting into ${firstHalf.length} + ${secondHalf.length} to isolate.`);
       const [firstResults, secondResults] = await Promise.all([
         extractBatchWithRecovery(anthropic, firstHalf, usageTracker, maxTokens),
         extractBatchWithRecovery(anthropic, secondHalf, usageTracker, maxTokens),
       ]);
       return [...firstResults, ...secondResults];
+    }
+
+    // A single page the filter keeps blocking can't be re-tried into success — stub it and go on.
+    if (contentFiltered) {
+      console.error(`Single page ${label} blocked by content-filtering policy — recording a stub and skipping it.`);
+      return [contentFilterStub(pageBatch[0].index)];
     }
 
     const nextMaxTokens = maxTokens * 2;
