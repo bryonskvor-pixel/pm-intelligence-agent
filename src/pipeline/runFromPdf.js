@@ -169,6 +169,21 @@ export function confirmManifest(manifest) {
   return Object.freeze(confirmed);
 }
 
+// Cross-validate the flat-offset assumption against what extraction actually read from the title
+// blocks. Pure and exported so the stage-based pipeline (which extracts across separate
+// invocations) runs the identical check at finalize.
+export function computeOrderingMismatches(candidateSheets, { orderedSheetNumbers, pageOffset, indexPageIndex }) {
+  const orderingMismatches = [];
+  for (const sheet of candidateSheets) {
+    if (!sheet.sheetNumber || sheet.pageIndex === indexPageIndex) continue;
+    const expectedNumber = orderedSheetNumbers[sheet.pageIndex - pageOffset];
+    if (expectedNumber && normalizeSheetNumber(expectedNumber) !== normalizeSheetNumber(sheet.sheetNumber)) {
+      orderingMismatches.push({ pageIndex: sheet.pageIndex, expected: expectedNumber, actual: sheet.sheetNumber });
+    }
+  }
+  return orderingMismatches;
+}
+
 // Stage 4-7. Throws — before any API call — unless the manifest went through confirmManifest().
 export async function executePipeline(pdfBytes, confirmedManifest) {
   if (!confirmedManifest?.[CONFIRMED]) {
@@ -189,14 +204,11 @@ export async function executePipeline(pdfBytes, confirmedManifest) {
   const candidateSheets = [indexSheet, ...newlyExtractedSheets];
   const pagesExtracted = [indexPageIndex, ...pagesToExtract].sort((a, b) => a - b);
 
-  const orderingMismatches = [];
-  for (const sheet of candidateSheets) {
-    if (!sheet.sheetNumber || sheet.pageIndex === indexPageIndex) continue;
-    const expectedNumber = orderedSheetNumbers[sheet.pageIndex - pageOffset];
-    if (expectedNumber && normalizeSheetNumber(expectedNumber) !== normalizeSheetNumber(sheet.sheetNumber)) {
-      orderingMismatches.push({ pageIndex: sheet.pageIndex, expected: expectedNumber, actual: sheet.sheetNumber });
-    }
-  }
+  const orderingMismatches = computeOrderingMismatches(candidateSheets, {
+    orderedSheetNumbers,
+    pageOffset,
+    indexPageIndex,
+  });
 
   const { gaps, excludedNonSheetReferences } = findMissingCrossReferences(candidateSheets);
 

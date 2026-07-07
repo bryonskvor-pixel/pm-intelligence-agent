@@ -18,11 +18,15 @@
     "test:triage": "node src/lib/test-triage.js",
     "test:gapcheck": "node src/lib/test-gapcheck.js",
     "test:gate": "node src/pipeline/test-gate.js",
+    "test:stages": "node src/pipeline/test-stages.js",
+    "stages:run": "node --env-file=.env.local --env-file=.cloudflare.env src/pipeline/run-stages-driver.js",
     "test:pipeline": "node src/pipeline/test-pipeline.js",
-    "test:render": "node src/render/test-render.js"
+    "test:render": "node src/render/test-render.js",
+    "test:r2": "node --env-file=.cloudflare.env src/lib/test-r2.js"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.32.1",
+    "aws4fetch": "^1.0.20",
     "pdf-lib": "^1.17.1"
   }
 }

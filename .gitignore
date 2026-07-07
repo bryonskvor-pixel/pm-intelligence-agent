@@ -9,6 +9,8 @@ extraction_output.json
 pipeline_report.md
 pipeline_result.json
 sample_report.md
+# Per-run manifest edit files fed to the stage driver's confirm command
+edits_run_*.json
 
 # Client project source PDFs — real project material, not tool source, don't belong in git history
 Docs/*.pdf

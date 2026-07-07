@@ -6,7 +6,9 @@ import { detectModelIds as detectSmokeGuard, runSmokeGuardSpecialist } from '../
 import { normalizeSheetNumber } from '../lib/sheetNumber.js';
 import { reconcileFindings } from './reconcile.js';
 
-const BRANDS = [
+// Exported for the stage-based pipeline (src/pipeline/stages.js), which runs one specialist per
+// invocation and needs the same registry routing uses.
+export const BRANDS = [
   { name: 'Modernfold', detect: detectModernfold, run: runModernfoldSpecialist },
   { name: 'Skyfold', detect: detectSkyfold, run: runSkyfoldSpecialist },
   { name: 'Euro-Wall', detect: detectEuroWall, run: runEuroWallSpecialist },
@@ -138,14 +140,12 @@ function dedupeFindings(findings) {
 // opts.orderingMismatches: [{ pageIndex, expected, actual }] index-order mismatches that
 //   survived extraction (Phase 4: same promotion).
 export async function runProjectSynthesis(projectSheets, { triageCandidates = {}, sheetInventory = null, gapCheck = null, unresolvedCandidates = [], orderingMismatches = [] } = {}) {
-  const { brandSheets, unclassified, multiProductSheets, duplicateSheetNumbers } = routeSheets(projectSheets, {
-    triageCandidates,
-  });
+  const routing = routeSheets(projectSheets, { triageCandidates });
 
-  const relevantBrands = BRANDS.filter((b) => brandSheets.get(b.name).length > 0);
+  const relevantBrands = BRANDS.filter((b) => routing.brandSheets.get(b.name).length > 0);
   const specialistResults = await Promise.all(
     relevantBrands.map(async (b) => {
-      const brandInput = brandSheets.get(b.name);
+      const brandInput = routing.brandSheets.get(b.name);
       return {
         brand: b.name,
         primarySheets: brandInput.filter((s) => s.role === 'primary').map((s) => s.sheetNumber),
@@ -154,6 +154,38 @@ export async function runProjectSynthesis(projectSheets, { triageCandidates = {}
       };
     })
   );
+
+  return assembleReport({
+    specialistResults,
+    routing,
+    sheetInventory:
+      sheetInventory || projectSheets.map((s) => ({ sheetNumber: s.sheetNumber, title: null, discipline: null })),
+    gapCheck,
+    unresolvedCandidates,
+    orderingMismatches,
+  });
+}
+
+// Everything after the specialist calls: dedupe -> reconcile -> section into the bid
+// qualification package. Split out of runProjectSynthesis so the stage-based pipeline — which
+// runs each specialist in its own invocation and persists results between calls — reassembles
+// the identical report from persisted specialist results instead of forking this logic.
+//
+// specialistResults: [{ brand, primarySheets, contextSheets, result }] in the shape the
+//   specialist runners return (result.findings, result.requiredConditionsUsed, ...).
+// routing: routeSheets() output (brandSheets unused here; unclassified/multiProductSheets/
+//   duplicateSheetNumbers carry into the report).
+// reconcileFn: injectable for free deterministic tests; defaults to the real reconciler.
+export async function assembleReport({
+  specialistResults,
+  routing,
+  sheetInventory,
+  gapCheck = null,
+  unresolvedCandidates = [],
+  orderingMismatches = [],
+  reconcileFn = reconcileFindings,
+}) {
+  const { unclassified, multiProductSheets, duplicateSheetNumbers } = routing;
 
   const allFindings = specialistResults.flatMap(({ brand, result }) =>
     (result.findings || []).map((f) => ({ ...f, brand }))
@@ -173,10 +205,9 @@ export async function runProjectSynthesis(projectSheets, { triageCandidates = {}
       (result.requiredConditionsUsed || []).map((rc) => ({ brand, ...rc }))
     );
     try {
-      const rec = await reconcileFindings({
+      const rec = await reconcileFn({
         findings: deduped,
-        sheetInventory:
-          sheetInventory || projectSheets.map((s) => ({ sheetNumber: s.sheetNumber, title: null, discipline: null })),
+        sheetInventory,
         gapCheck,
         multiProductSheets,
         requiredConditions,
